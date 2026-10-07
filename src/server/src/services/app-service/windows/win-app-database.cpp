@@ -1038,10 +1038,16 @@ std::vector<WindowsAppDatabase::AppPtr> WindowsAppDatabase::findOpeners(const Ta
   ScopedCom com;
   std::vector<AppPtr> result;
 
+  // the handler enumeration order does not reflect the user's default choice
   if (assoc->kind == AssocKind::Extension) {
     const QString ext = QString::fromStdWString(assoc->value);
+    if (auto exe = defaultHandlerExe(assoc->value)) {
+      result.emplace_back(resolveExecutable(*exe, friendlyAppName(assoc->value), ext));
+    }
     for (auto &[exe, display] : enumExtensionHandlers(assoc->value, ASSOC_FILTER_RECOMMENDED)) {
-      result.emplace_back(resolveExecutable(exe, display, ext));
+      auto app = resolveExecutable(exe, display, ext);
+      const bool dup = std::ranges::any_of(result, [&](const AppPtr &r) { return r->id() == app->id(); });
+      if (!dup) result.emplace_back(std::move(app));
     }
   }
 
