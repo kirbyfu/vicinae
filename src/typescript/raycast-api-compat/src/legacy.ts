@@ -1,7 +1,6 @@
 // deprecated pre-1.0 exports: https://developers.raycast.com/misc/migration
 
 import {
-	Action,
 	AI,
 	Alert,
 	Form,
@@ -12,6 +11,7 @@ import {
 	Toast,
 } from "@vicinae/api";
 import { Clipboard } from "./clipboard.js";
+import { Action } from "./components/action.js";
 import { ActionPanel } from "./components/action-panel.js";
 import { unsupported } from "./unsupported.js";
 

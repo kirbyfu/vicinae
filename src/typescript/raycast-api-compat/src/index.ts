@@ -6,7 +6,6 @@
  */
 
 export {
-	Action,
 	AI,
 	Alert,
 	Cache,
@@ -31,7 +30,6 @@ export {
 	List,
 	LocalStorage,
 	OAuth,
-	open,
 	openCommandPreferences,
 	openExtensionPreferences,
 	PopToRootType,
@@ -47,6 +45,7 @@ export {
 } from "@vicinae/api";
 export { Clipboard } from "./clipboard.js";
 export { BrowserExtension } from "./browser.js";
+export { Action } from "./components/action.js";
 export { ActionPanel } from "./components/action-panel.js";
 export * from "./legacy.js";
 export {
@@ -55,6 +54,7 @@ export {
 	getDefaultApplication,
 	getFrontmostApplication,
 	getSelectedFinderItems,
+	open,
 	showInFinder,
 } from "./system.js";
 export {

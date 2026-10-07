@@ -19,6 +19,19 @@ export const transformApp = (app: vicinae.Application): RaycastApplication => {
 	};
 };
 
+// accepts both raycast-shaped apps (from getApplications) and vicinae ones (appPicker preference values)
+export const open = async (
+	target: string,
+	application?: string | Partial<RaycastApplication & vicinae.Application>,
+) => {
+	const app =
+		typeof application === "string"
+			? application
+			: (application?.id ?? application?.bundleId ?? application?.windowsAppId);
+
+	await vicinae.open(target, app);
+};
+
 export const getApplications = async (
 	path?: PathLike,
 ): Promise<RaycastApplication[]> => {
