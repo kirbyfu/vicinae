@@ -50,6 +50,8 @@ void SearchFilesViewHost::initialize() {
   initModel();
 
   m_section.setOnFileSelected([this](const fs::path &p) { loadDetail(p); });
+  m_section.setOnToggleDetail([this] { toggleDetail(); });
+  m_detailEnabled = command()->storage().getItem("showDetail").toBool(true);
   model()->addSource(&m_section);
 
   setSearchPlaceholderText(tr("Search for files..."));
@@ -172,6 +174,9 @@ void SearchFilesViewHost::handleSearchResults() {
 }
 
 void SearchFilesViewHost::loadDetail(const fs::path &path) {
+  m_selectedPath = path;
+  if (!m_detailEnabled) return;
+
   m_hasDetail = true;
   m_detailName = QString::fromStdString(getLastPathComponent(path));
   m_detailPath = QString::fromStdString(compressPath(path).string());
@@ -188,6 +193,7 @@ void SearchFilesViewHost::loadDetail(const fs::path &path) {
 }
 
 void SearchFilesViewHost::clearDetail() {
+  m_selectedPath.reset();
   m_hasDetail = false;
   m_detailName.clear();
   m_detailPath.clear();
@@ -195,6 +201,18 @@ void SearchFilesViewHost::clearDetail() {
   m_detailLastModified.clear();
   m_detailImageSource.clear();
   m_detailTextContent.clear();
+  emit detailChanged();
+}
+
+void SearchFilesViewHost::toggleDetail() {
+  m_detailEnabled = !m_detailEnabled;
+  command()->storage().setItem("showDetail", m_detailEnabled);
+
+  if (m_detailEnabled && m_selectedPath) {
+    loadDetail(*m_selectedPath);
+    return;
+  }
+
   emit detailChanged();
 }
 

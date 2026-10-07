@@ -16,6 +16,8 @@ public:
     m_onFileSelected = std::move(cb);
   }
 
+  void setOnToggleDetail(std::function<void()> cb) { m_onToggleDetail = std::move(cb); }
+
   void onSelected(int i) override {
     if (m_onFileSelected) m_onFileSelected(m_files.at(i));
   }
@@ -35,4 +37,5 @@ private:
   std::vector<std::filesystem::path> m_files;
   QString m_sectionName;
   std::function<void(const std::filesystem::path &)> m_onFileSelected;
+  std::function<void()> m_onToggleDetail;
 };

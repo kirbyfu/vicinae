@@ -1,3 +1,4 @@
+#include <QCoreApplication>
 #include <QUrl>
 
 #include "builtins/file/search-files-model.hpp"
@@ -23,7 +24,16 @@ std::optional<ImageURL> SearchFilesSection::itemIcon(int i) const {
 }
 
 std::unique_ptr<ActionPanelState> SearchFilesSection::actionPanel(int i) const {
-  return FileActions::actionPanel(m_files.at(i), scope().appContext());
+  auto panel = FileActions::actionPanel(m_files.at(i), scope().appContext());
+
+  if (m_onToggleDetail) {
+    auto toggle = new StaticAction(QCoreApplication::translate("SearchFilesSection", "Toggle Details"),
+                                   ImageURL::builtin(BuiltinIcon::AppWindowSidebarRight), m_onToggleDetail);
+    toggle->setShortcut(Keyboard::Shortcut(Qt::Key_D, Qt::ControlModifier | Qt::ShiftModifier));
+    panel->createSection()->addAction(toggle);
+  }
+
+  return panel;
 }
 
 std::unique_ptr<QMimeData> SearchFilesSection::dragMimeData(int i) const {

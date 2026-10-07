@@ -35,7 +35,7 @@ public:
   void loadInitialData() override;
   void textChanged(const QString &text) override;
 
-  bool hasDetail() const { return m_hasDetail; }
+  bool hasDetail() const { return m_hasDetail && m_detailEnabled; }
   QString detailName() const { return m_detailName; }
   QString detailPath() const { return m_detailPath; }
   QString detailMimeType() const { return m_detailMimeType; }
@@ -57,6 +57,7 @@ private:
   void handleSearchResults();
   void loadDetail(const std::filesystem::path &path);
   void clearDetail();
+  void toggleDetail();
   void restoreCategoryFilter();
   std::optional<vicinae::FileCategory> selectedCategory() const;
 
@@ -76,6 +77,8 @@ private:
   ResultMode m_resultMode = ResultMode::Recent;
 
   bool m_hasDetail = false;
+  bool m_detailEnabled = true;
+  std::optional<std::filesystem::path> m_selectedPath;
   QString m_detailName;
   QString m_detailPath;
   QString m_detailMimeType;
