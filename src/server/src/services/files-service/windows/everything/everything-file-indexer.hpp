@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -24,5 +25,7 @@ private:
 
   mutable std::mutex m_mutex;
   mutable std::unique_ptr<EverythingClient> m_client;
+  // last known availability, served to UI-thread callers while a query holds m_mutex
+  mutable std::atomic<bool> m_available{false};
   std::wstring m_instanceName;
 };

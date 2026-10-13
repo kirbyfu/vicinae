@@ -1,5 +1,7 @@
 #include <QtConcurrent/QtConcurrentRun>
+#include <qlogging.h>
 #include <qstring.h>
+#include <chrono>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -11,6 +13,7 @@
 namespace {
 
 constexpr char REGEX_PREFIX = '@';
+constexpr std::chrono::milliseconds SLOW_QUERY_THRESHOLD{1000};
 
 std::optional<std::wstring> categoryFilter(vicinae::FileCategory category) {
   using vicinae::FileCategory;
@@ -75,8 +78,14 @@ bool EverythingFileIndexer::ensureClient() const {
 }
 
 bool EverythingFileIndexer::isAvailable() const {
-  std::scoped_lock lock(m_mutex);
-  return ensureClient();
+  // Called from the UI thread (backend selection, extension launch). Never wait behind an
+  // in-flight query: it can be blocked on Everything's IPC for as long as Everything is stalled.
+  std::unique_lock lock(m_mutex, std::try_to_lock);
+
+  if (!lock.owns_lock()) { return m_available; }
+
+  m_available = ensureClient();
+  return m_available;
 }
 
 void EverythingFileIndexer::setInstanceName(std::wstring name) {
@@ -101,12 +110,23 @@ std::vector<IndexerFileResult> EverythingFileIndexer::runQuery(const std::string
   {
     std::scoped_lock lock(m_mutex);
 
-    if (!ensureClient()) { return {}; }
+    m_available = ensureClient();
 
+    if (!m_available) { return {}; }
+
+    auto const started = std::chrono::steady_clock::now();
     auto found = m_client->search(search);
+    auto const elapsed =
+        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
+
+    if (elapsed >= SLOW_QUERY_THRESHOLD) {
+      qWarning() << "EverythingFileIndexer: query" << QString::fromStdWString(search.text) << "took"
+                 << elapsed.count() << "ms";
+    }
 
     if (!found) {
       m_client.reset();
+      m_available = false;
       return {};
     }
 

@@ -17,6 +17,7 @@ constexpr DWORD SEARCH_REGEX = 0x00000008;
 constexpr DWORD SORT_DATE_MODIFIED_DESCENDING = 14;
 constexpr DWORD ITEM_FOLDER = 0x00000001;
 constexpr DWORD REPLY_TIMEOUT_MS = 5000;
+constexpr UINT SEND_TIMEOUT_MS = 5000;
 
 #pragma pack(push, 1)
 struct Query2Header {
@@ -184,14 +185,33 @@ std::optional<std::vector<WinFileCandidate>> EverythingWindowClient::search(cons
 
   COPYDATASTRUCT cds{
       .dwData = COPYDATA_QUERY2W, .cbData = static_cast<DWORD>(query.size()), .lpData = query.data()};
-  bool const ok = SendMessageW(everything, WM_COPYDATA, reinterpret_cast<WPARAM>(reply),
-                               reinterpret_cast<LPARAM>(&cds)) != 0 &&
-                  waitForReply(state);
+  // No SMTO_BLOCK: Everything may send its WM_COPYDATA reply to us before this call returns, and we
+  // must keep dispatching sent messages to receive it.
+  DWORD_PTR accepted = 0;
+  LRESULT const sent = SendMessageTimeoutW(everything, WM_COPYDATA, reinterpret_cast<WPARAM>(reply),
+                                           reinterpret_cast<LPARAM>(&cds), SMTO_NORMAL | SMTO_ABORTIFHUNG,
+                                           SEND_TIMEOUT_MS, &accepted);
+
+  if (sent == 0) {
+    DWORD const error = GetLastError();
+    DestroyWindow(reply);
+    qWarning() << "EverythingWindowClient: Everything did not accept the query (error" << error
+               << (error == ERROR_TIMEOUT ? "timeout or hung)" : ")");
+    return std::nullopt;
+  }
+
+  if (accepted == 0) {
+    DestroyWindow(reply);
+    qWarning() << "EverythingWindowClient: Everything rejected the query";
+    return std::nullopt;
+  }
+
+  bool const ok = waitForReply(state);
 
   DestroyWindow(reply);
 
   if (!ok) {
-    qWarning() << "EverythingWindowClient: no reply from Everything";
+    qWarning() << "EverythingWindowClient: no reply from Everything within" << REPLY_TIMEOUT_MS << "ms";
     return std::nullopt;
   }
 

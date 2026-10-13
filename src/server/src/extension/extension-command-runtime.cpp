@@ -18,6 +18,7 @@
 #include "service-registry.hpp"
 #include "services/app-service/app-service.hpp"
 #include "services/asset-resolver/asset-resolver.hpp"
+#include <QElapsedTimer>
 #include <QString>
 #include <glaze/json/generic.hpp>
 #include <glaze/json/prettify.hpp>
@@ -30,6 +31,8 @@
 #include "services/toast/toast.hpp"
 #include "vicinae.hpp"
 #include "generated/manager.hpp"
+
+static constexpr qint64 SLOW_CAPABILITY_PROBE_MS = 200;
 
 void ExtensionCommandRuntime::initialize() {
   auto manager = context()->services->extensionManager();
@@ -152,10 +155,25 @@ void ExtensionCommandRuntime::load(const LaunchProps &props) {
                    }) |
                    std::ranges::to<std::unordered_map<std::string, std::string>>();
 
-  opts.capabilities.browserExtension = !context()->services->browserExtension()->browsers().empty();
-  opts.capabilities.windowManagement = context()->services->windowManager()->isCapable();
-  opts.capabilities.wallpaper = context()->services->wallpaperManager()->canSetWallpaper();
-  opts.capabilities.fileSearch = context()->services->fileService()->isAvailable();
+  // these probes run on the UI thread, so flag any that are slow enough to freeze the launcher
+  QElapsedTimer probeTimer;
+  auto const probe = [&](const char *name, auto &&fn) {
+    probeTimer.start();
+    bool const value = fn();
+    if (auto const ms = probeTimer.elapsed(); ms >= SLOW_CAPABILITY_PROBE_MS) {
+      qWarning() << "Extension launch: capability probe" << name << "took" << ms << "ms";
+    }
+    return value;
+  };
+
+  opts.capabilities.browserExtension =
+      probe("browserExtension", [&] { return !context()->services->browserExtension()->browsers().empty(); });
+  opts.capabilities.windowManagement =
+      probe("windowManagement", [&] { return context()->services->windowManager()->isCapable(); });
+  opts.capabilities.wallpaper =
+      probe("wallpaper", [&] { return context()->services->wallpaperManager()->canSetWallpaper(); });
+  opts.capabilities.fileSearch =
+      probe("fileSearch", [&] { return context()->services->fileService()->isAvailable(); });
 
   // FIXME: relying on the presence of props.cwd to infer CommandLine mode is not
   // very accurate and could break in the future, we probably want to pass the activation
