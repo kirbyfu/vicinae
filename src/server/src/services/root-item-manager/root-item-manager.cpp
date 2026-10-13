@@ -170,6 +170,7 @@ void RootItemManager::search(const QString &query, std::vector<ScoredItem> &resu
                              const RootItemPrefixSearchOptions &opts) {
   std::string pattern = query.toStdString();
   fuzzy::Query const fuzzyQuery{pattern};
+  auto const affinities = m_visitTracker.affinities(pattern);
 
   results.clear();
   results.reserve(m_items.size());
@@ -182,7 +183,14 @@ void RootItemManager::search(const QString &query, std::vector<ScoredItem> &resu
 
     if (!fuzzyScore) { continue; }
 
-    results.emplace_back(ScoredItem{.meta = item.meta, .score = fuzzyScore, .item = item.item});
+    VisitTracker::QueryAffinity affinity;
+
+    if (!affinities.empty()) {
+      if (auto it = affinities.find(item.item->uniqueId()); it != affinities.end()) { affinity = it->second; }
+    }
+
+    results.emplace_back(
+        ScoredItem{.meta = item.meta, .score = fuzzyScore, .item = item.item, .affinity = affinity});
   }
 
   // we need stable sort to avoid flickering when updating quickly
@@ -196,6 +204,9 @@ void RootItemManager::search(const QString &query, std::vector<ScoredItem> &resu
         return a.meta->alias->size() < b.meta->alias->size();
       }
     }
+
+    // what was picked before for this text comes first, as in Listary
+    if (a.affinity != b.affinity) { return a.affinity > b.affinity; }
 
     return a.score > b.score;
   });
@@ -518,10 +529,10 @@ bool RootItemManager::resetRanking(const EntrypointId &id) {
   return true;
 }
 
-bool RootItemManager::registerVisit(const EntrypointId &id) {
+bool RootItemManager::registerVisit(const EntrypointId &id, std::string_view query) {
   ++m_metadata[id].visitCount;
   m_metadata[id].lastVisitedAt = QDateTime::currentSecsSinceEpoch();
-  m_visitTracker.registerVisit(id);
+  m_visitTracker.registerVisit(id, query);
   return true;
 }
 

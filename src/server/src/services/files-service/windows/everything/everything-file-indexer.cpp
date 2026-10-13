@@ -1,6 +1,7 @@
 #include <QtConcurrent/QtConcurrentRun>
 #include <qlogging.h>
 #include <qstring.h>
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <span>
@@ -14,6 +15,8 @@ namespace {
 
 constexpr char REGEX_PREFIX = '@';
 constexpr std::chrono::milliseconds SLOW_QUERY_THRESHOLD{1000};
+constexpr int MIN_CANDIDATE_POOL = 250;
+constexpr int CANDIDATE_POOL_MULTIPLIER = 5;
 
 std::optional<std::wstring> categoryFilter(vicinae::FileCategory category) {
   using vicinae::FileCategory;
@@ -101,9 +104,16 @@ std::vector<IndexerFileResult> EverythingFileIndexer::runQuery(const std::string
                                                                const IndexerQueryParams &params) {
   if (params.limit <= 0) { return {}; }
 
-  EverythingSearch const search = buildSearch(query, params);
+  EverythingSearch search = buildSearch(query, params);
 
   if (search.text.empty()) { return {}; }
+
+  // Everything orders by date modified; fetch a wider window so the best name matches in it can be
+  // ranked first. Regex and category-only listings keep Everything's order.
+  std::string const nameQuery = QString::fromStdString(query).trimmed().toStdString();
+  bool const rankByName = !search.regex && !nameQuery.empty();
+
+  if (rankByName) { search.maxResults = std::max(MIN_CANDIDATE_POOL, params.limit * CANDIDATE_POOL_MULTIPLIER); }
 
   std::vector<WinFileCandidate> candidates;
 
@@ -132,6 +142,8 @@ std::vector<IndexerFileResult> EverythingFileIndexer::runQuery(const std::string
 
     candidates = std::move(*found);
   }
+
+  if (rankByName) { return rankedWinFileResults(std::move(candidates), nameQuery, params); }
 
   return orderedWinFileResults(std::move(candidates), params);
 }

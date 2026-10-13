@@ -1,6 +1,7 @@
 #pragma once
 #include <QCoreApplication>
 #include "actions/app-actions.hpp"
+#include "navigation-controller.hpp"
 #include "service-registry.hpp"
 #include "services/files-service/file-service.hpp"
 
@@ -8,9 +9,10 @@ class OpenFileAction : public OpenAppAction {
 public:
   void execute(ApplicationContext *ctx) override {
     auto files = ctx->services->fileService();
+    auto const query = ctx->navigation->searchText().toStdString();
 
     OpenAppAction::execute(ctx);
-    files->recordAccess(m_path);
+    files->recordAccess(m_path, query);
   }
 
   OpenFileAction(const std::filesystem::path &path, const std::shared_ptr<AbstractApplication> &app)
@@ -29,9 +31,10 @@ class OpenFileInAppAction : public OpenAppAction {
 public:
   void execute(ApplicationContext *ctx) override {
     auto files = ctx->services->fileService();
+    auto const query = ctx->navigation->searchText().toStdString();
 
     OpenAppAction::execute(ctx);
-    files->recordAccess(m_path);
+    files->recordAccess(m_path, query);
   }
 
   OpenFileInAppAction(const std::filesystem::path &path, const std::shared_ptr<AbstractApplication> &app,

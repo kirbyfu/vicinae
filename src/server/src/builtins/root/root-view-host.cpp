@@ -71,7 +71,7 @@ void RootViewHost::beforeActionExecuted(const AbstractAction *action) {
 
   manager->searchHistory().add(text.toStdString());
 
-  if (auto item = m_model->selectedRootItem()) { manager->registerVisit(item->uniqueId()); }
+  if (auto item = m_model->selectedRootItem()) { manager->registerVisit(item->uniqueId(), text.toStdString()); }
 }
 
 bool RootViewHost::tryAliasFastTrack() {

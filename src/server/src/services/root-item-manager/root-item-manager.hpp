@@ -256,6 +256,8 @@ public:
     // we return the shared ptr so that callers can keep a ref to it if needed,
     // but we don't want to increment the ref count as part of the search process.
     std::reference_wrapper<ItemPtr> item;
+    // ties the item to the search text through past picks; outranks the fuzzy score
+    VisitTracker::QueryAffinity affinity;
   };
 
   // A provider together with the items that matched a query, used by views that
@@ -301,7 +303,7 @@ public:
   bool moveFavoriteDown(const EntrypointId &id);
   bool moveFavoriteUp(const EntrypointId &id);
   bool resetRanking(const EntrypointId &id);
-  bool registerVisit(const EntrypointId &id);
+  bool registerVisit(const EntrypointId &id, std::string_view query = {});
   SearchHistory &searchHistory() { return m_searchHistory; }
   bool setItemAsFavorite(const EntrypointId &item, bool value = true);
   bool setProviderEnabled(const QString &providerId, bool value);

@@ -108,8 +108,8 @@ public:
     }
 
     if (ctx->services->appDb()->launchRaw({QString::fromStdString(m_path.string())})) {
+      files->recordAccess(m_path, ctx->navigation->searchText().toStdString());
       ctx->navigation->closeWindow();
-      files->recordAccess(m_path);
     } else {
       ctx->services->toastService()->failure(tr("Failed to start executable"));
     }
