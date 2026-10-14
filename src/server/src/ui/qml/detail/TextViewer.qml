@@ -13,8 +13,17 @@ ScrollViewport {
     property list<string> highlightTerms
     property color highlightColor: Qt.alpha(Theme.accent, 0.35)
 
-    onTextChanged: Qt.callLater(scrollToFirstMatch)
+    onTextChanged: scrollTimer.restart()
     onInitialized: scrollToFirstMatch()
+
+    // Not Qt.callLater: a call queued there still runs after a Loader has torn this viewer down
+    // (it only skips destroyed objects), and the AOT-compiled call crashes in the cleared
+    // context. A Timer's handler is disconnected along with the context.
+    Timer {
+        id: scrollTimer
+        interval: 0
+        onTriggered: root.scrollToFirstMatch()
+    }
 
     function scrollToFirstMatch() {
         if (matchHighlighter.firstMatchPosition < 0) {
@@ -64,7 +73,7 @@ ScrollViewport {
                 textDocument: textEdit.textDocument
                 terms: root.highlightTerms
                 color: root.highlightColor
-                onFirstMatchPositionChanged: Qt.callLater(root.scrollToFirstMatch)
+                onFirstMatchPositionChanged: scrollTimer.restart()
             }
         }
     }

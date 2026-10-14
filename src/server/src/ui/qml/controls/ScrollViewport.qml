@@ -63,11 +63,20 @@ Item {
         when: target !== null
     }
 
-    Component.onCompleted: Qt.callLater(() => {
-        if (!root._positioned && root.resetOnInitialization)
-            root.resetPosition();
-        root.initialized();
-    })
+    // Not Qt.callLater: when a Loader deactivates this item before the call runs, Qt.callLater
+    // still invokes it in the torn-down QML context (it only skips destroyed objects), which
+    // crashes AOT-compiled code. A Timer's handler is disconnected along with the context.
+    Timer {
+        id: initTimer
+        interval: 0
+        onTriggered: {
+            if (!root._positioned && root.resetOnInitialization)
+                root.resetPosition();
+            root.initialized();
+        }
+    }
+
+    Component.onCompleted: initTimer.start()
 
     function scrollTo(y: real) {
         _positioned = true;
