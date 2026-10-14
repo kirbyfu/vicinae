@@ -1,0 +1,6 @@
+# Build tools for build-local.bat. Pinned so every machine builds the same way; bump deliberately.
+[tools]
+cmake = "4.4.4"
+ninja = "1.13.2"
+uv = "0.12.23"
+"pipx:aqtinstall" = "3.3.0"
