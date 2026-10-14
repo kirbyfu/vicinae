@@ -21,6 +21,9 @@ SelectableDelegate {
     required property bool itemIsActive
     property var itemAccessory: []
     property string itemAccessoryColor: ""
+    // The subtitle is a path: the title keeps its full width, the subtitle gets what's left
+    // (hidden when that's too narrow to be useful) and elides in the middle to keep both ends.
+    property bool subtitleIsPath: false
 
     RowLayout {
         anchors.fill: parent
@@ -62,7 +65,8 @@ SelectableDelegate {
             readonly property real shortcutLeadingSpace: 8
             readonly property real aliasSpace: (aliasBadge.visible ? aliasBadge.width + spacing : 0) + (shortcutBadge.visible ? shortcutBadge.width + spacing + shortcutLeadingSpace : 0)
             readonly property real availableForText: width - aliasSpace
-            readonly property real subtitleReserved: subtitleText.visible ? Math.min(subtitleText.implicitWidth + spacing, availableForText * 0.5) : 0
+            readonly property real minPathSubtitleWidth: 60
+            readonly property real subtitleReserved: subtitleText.visible && !root.subtitleIsPath ? Math.min(subtitleText.implicitWidth + spacing, availableForText * 0.5) : 0
 
             Text {
                 id: titleText
@@ -78,7 +82,7 @@ SelectableDelegate {
 
             Text {
                 id: subtitleText
-                visible: root.itemSubtitle !== ""
+                visible: root.itemSubtitle !== "" && (!root.subtitleIsPath || textRow.availableForText - titleText.implicitWidth - textRow.spacing >= textRow.minPathSubtitleWidth)
                 anchors.left: titleText.right
                 anchors.leftMargin: visible ? textRow.spacing : 0
                 anchors.baseline: titleText.baseline
@@ -86,7 +90,7 @@ SelectableDelegate {
                 text: root.itemSubtitle
                 color: root.selected ? root.appearance.selectedSecondaryText : root.hovered ? root.appearance.hoveredSecondaryText : Theme.textMuted
                 font.pointSize: Theme.regularFontSize
-                elide: Text.ElideRight
+                elide: root.subtitleIsPath ? Text.ElideMiddle : Text.ElideRight
                 maximumLineCount: 1
             }
 

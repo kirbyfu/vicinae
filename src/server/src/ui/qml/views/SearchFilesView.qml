@@ -26,6 +26,7 @@ Item {
         cmdModel: root.host.listModel
         detailComponent: detailPanel
         detailVisible: root.host.hasDetail
+        subtitleIsPath: true
     }
 
     Component {

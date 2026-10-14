@@ -11,13 +11,22 @@ void SearchFilesSection::setFiles(std::vector<std::filesystem::path> files, cons
   notifyChanged();
 }
 
+void SearchFilesSection::setShowParentPath(bool value) {
+  if (m_showParentPath == value) return;
+  m_showParentPath = value;
+  notifyChanged();
+}
+
 QString SearchFilesSection::itemId(int i) const { return QString::fromStdString(m_files.at(i).string()); }
 
 QString SearchFilesSection::itemTitle(int i) const {
   return QString::fromStdString(getLastPathComponent(m_files.at(i)));
 }
 
-QString SearchFilesSection::itemSubtitle(int i) const { return {}; }
+QString SearchFilesSection::itemSubtitle(int i) const {
+  if (!m_showParentPath) return {};
+  return QString::fromStdString(compressPath(m_files.at(i).parent_path()).string());
+}
 
 std::optional<ImageURL> SearchFilesSection::itemIcon(int i) const {
   return ImageURL::fileIcon(m_files.at(i));

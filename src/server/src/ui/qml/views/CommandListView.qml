@@ -5,6 +5,7 @@ import Vicinae
 GenericListView {
     id: commandListView
     property var cmdModel: null
+    property bool subtitleIsPath: false
     model: cmdModel
     listModel: cmdModel
     autoWireModel: true
@@ -46,6 +47,7 @@ GenericListView {
                 width: delegateLoader.width
                 itemTitle: delegateLoader.title
                 itemSubtitle: delegateLoader.subtitle
+                subtitleIsPath: commandListView.subtitleIsPath
                 itemIconSource: delegateLoader.iconSource
                 itemAlias: ""
                 itemIsActive: false

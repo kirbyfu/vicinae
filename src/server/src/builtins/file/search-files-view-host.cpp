@@ -52,6 +52,7 @@ void SearchFilesViewHost::initialize() {
   m_section.setOnFileSelected([this](const fs::path &p) { loadDetail(p); });
   m_section.setOnToggleDetail([this] { toggleDetail(); });
   m_detailEnabled = command()->storage().getItem("showDetail").toBool(true);
+  m_section.setShowParentPath(!m_detailEnabled);
   model()->addSource(&m_section);
 
   setSearchPlaceholderText(tr("Search for files..."));
@@ -207,6 +208,7 @@ void SearchFilesViewHost::clearDetail() {
 void SearchFilesViewHost::toggleDetail() {
   m_detailEnabled = !m_detailEnabled;
   command()->storage().setItem("showDetail", m_detailEnabled);
+  m_section.setShowParentPath(!m_detailEnabled);
 
   if (m_detailEnabled && m_selectedPath) {
     loadDetail(*m_selectedPath);

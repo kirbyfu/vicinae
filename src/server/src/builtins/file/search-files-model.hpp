@@ -18,6 +18,9 @@ public:
 
   void setOnToggleDetail(std::function<void()> cb) { m_onToggleDetail = std::move(cb); }
 
+  // Shows each file's parent directory as the subtitle, for when no detail panel shows the path.
+  void setShowParentPath(bool value);
+
   void onSelected(int i) override {
     if (m_onFileSelected) m_onFileSelected(m_files.at(i));
   }
@@ -38,4 +41,5 @@ private:
   QString m_sectionName;
   std::function<void(const std::filesystem::path &)> m_onFileSelected;
   std::function<void()> m_onToggleDetail;
+  bool m_showParentPath = false;
 };
