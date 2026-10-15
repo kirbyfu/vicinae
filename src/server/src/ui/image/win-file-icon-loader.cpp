@@ -27,6 +27,9 @@ namespace {
 constexpr const wchar_t *ALL_TASKS_FOLDER = L"shell:::{ED7BA470-8E54-465E-825C-99712043E01C}";
 constexpr QStringView ALL_TASKS_PREFIX = u"::{ED7BA470-8E54-465E-825C-99712043E01C}\\";
 
+constexpr int PENDING_RETRIES = 5;
+constexpr DWORD PENDING_RETRY_DELAY_MS = 100;
+
 // Some icons come back with an all-zero alpha channel (stored without alpha); force those opaque.
 QImage imageFromHBITMAP(HBITMAP bitmap) {
   BITMAP bm{};
@@ -156,6 +159,11 @@ QImage renderWinShellIcon(const QString &parsingName, const QSize &size) {
     HBITMAP bitmap = nullptr;
     // ICONONLY: never a document thumbnail. BIGGERSIZEOK: allow upscaling for sharpness.
     hr = factory->GetImage(requested, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap);
+    // E_PENDING: the shell deferred extracting an icon it had not cached yet; it is ready shortly after
+    for (int retry = 0; hr == E_PENDING && retry < PENDING_RETRIES; ++retry) {
+      Sleep(PENDING_RETRY_DELAY_MS);
+      hr = factory->GetImage(requested, SIIGBF_ICONONLY | SIIGBF_BIGGERSIZEOK, &bitmap);
+    }
     if (SUCCEEDED(hr) && bitmap) {
       result = imageFromHBITMAP(bitmap);
       DeleteObject(bitmap);

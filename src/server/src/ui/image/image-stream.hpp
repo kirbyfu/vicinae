@@ -58,6 +58,8 @@ private:
   QString m_latestCacheKey;
   QString m_originalLatestCacheKey;
   int m_fallbacksRemaining = 2;
+  // false once a shell icon failed: its failures are often transient, so the original is retried next time
+  bool m_cacheFallbackAsOriginal = true;
   ImageStreamOptions m_opts;
 
   QMovie *m_movie = nullptr;

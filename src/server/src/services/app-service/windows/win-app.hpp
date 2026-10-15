@@ -116,9 +116,11 @@ public:
   }
 
   ImageURL iconUrl() const override {
-    constexpr int SIID_SHIELD_ID = 77; // SIID_SHIELD
+    constexpr int SIID_SHIELD_ID = 77;     // SIID_SHIELD
+    constexpr int SIID_APPLICATION_ID = 2; // SIID_APPLICATION
     if (m_data.elevated) return ImageURL::winStockIcon(SIID_SHIELD_ID);
-    return ImageURL::winShellIcon(shellParsingName());
+    return ImageURL::winShellIcon(shellParsingName())
+        .withFallback(ImageURL::winStockIcon(SIID_APPLICATION_ID));
   }
 
   const WindowsAppKind &kind() const { return m_data.kind; }

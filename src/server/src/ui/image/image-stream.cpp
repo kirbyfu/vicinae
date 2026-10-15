@@ -154,6 +154,7 @@ void ImageStream::tryFallback() {
     return;
   }
   m_fallbacksRemaining--;
+  if (m_url.type() == ImageURLType::WinShellIcon) m_cacheFallbackAsOriginal = false;
 
   if (auto fb = m_url.fallback())
     m_url = ImageURL(*fb).resolved();
@@ -406,9 +407,10 @@ void ImageStream::emitStaticFrame(QImage img) {
   if (m_opts.cache) {
     auto cost = static_cast<int>(img.sizeInBytes());
     imageCache().insert(m_cacheKey, new QImage(img), cost);
-    if (m_originalCacheKey != m_cacheKey) imageCache().insert(m_originalCacheKey, new QImage(img), cost);
+    if (m_cacheFallbackAsOriginal && m_originalCacheKey != m_cacheKey)
+      imageCache().insert(m_originalCacheKey, new QImage(img), cost);
     latestImageCache().insert(m_latestCacheKey, new QImage(img));
-    if (m_originalLatestCacheKey != m_latestCacheKey)
+    if (m_cacheFallbackAsOriginal && m_originalLatestCacheKey != m_latestCacheKey)
       latestImageCache().insert(m_originalLatestCacheKey, new QImage(img));
   }
   emit frameReady(img);
@@ -455,7 +457,7 @@ void ImageStream::startAnimation(QByteArray data) {
   connect(worker, &AnimFrameWorker::frameReady, this, [this](const QImage &frame) {
     if (m_opts.cache) {
       latestImageCache().insert(m_latestCacheKey, new QImage(frame));
-      if (m_originalLatestCacheKey != m_latestCacheKey)
+      if (m_cacheFallbackAsOriginal && m_originalLatestCacheKey != m_latestCacheKey)
         latestImageCache().insert(m_originalLatestCacheKey, new QImage(frame));
     }
     emit this->frameReady(frame);
