@@ -21,6 +21,7 @@ public:
   void setCapturing(bool capturing) override;
 
   bool dispatchKey(unsigned int vk, unsigned int mods, bool down);
+  bool capturing();
 
   static void suppressNextKeyUp(unsigned int vk);
 
@@ -33,7 +34,7 @@ private:
     bool down;
   };
 
-  bool dispatchModifier(unsigned int mods, bool down);
+  bool dispatchModifier(unsigned int bit, unsigned int mods, bool down);
   void activate(const QString &id);
   void release(const QString &id);
 

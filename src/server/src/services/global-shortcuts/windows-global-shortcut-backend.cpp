@@ -161,7 +161,12 @@ LRESULT CALLBACK keyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
     } else {
       g_heldMods &= ~bit;
     }
-    const UINT mods = (currentModifiers() | g_heldMods) & (down ? ~0u : ~bit);
+    const UINT asyncMods = currentModifiers();
+    // The hook misses some key ups (e.g. Win released on the lock screen after Win+L), which would leave a
+    // modifier held here for good. Outside capture we never eat modifiers, so the async key state is right
+    // for every modifier but the one of this event, which it doesn't include yet.
+    if (g_backend && !g_backend->capturing()) { g_heldMods &= asyncMods | bit; }
+    const UINT mods = (asyncMods | g_heldMods) & (down ? ~0u : ~bit);
     // both must run on every event so their internal states stay consistent
     const bool shortcutEaten = g_backend && g_backend->dispatchKey(k->vkCode, mods, down);
     const bool suppressionEaten = consumeSuppressedKeyUp(k->vkCode, down);
@@ -232,7 +237,7 @@ bool WindowsGlobalShortcutBackend::dispatchKey(unsigned int vk, unsigned int mod
     return true;
   }
 
-  if (modBitForVk(vk)) { return dispatchModifier(mods, down); }
+  if (const UINT bit = modBitForVk(vk)) { return dispatchModifier(bit, mods, down); }
 
   bool eaten = false;
 
@@ -262,8 +267,11 @@ bool WindowsGlobalShortcutBackend::dispatchKey(unsigned int vk, unsigned int mod
   return eaten;
 }
 
-bool WindowsGlobalShortcutBackend::dispatchModifier(unsigned int mods, bool down) {
+bool WindowsGlobalShortcutBackend::dispatchModifier(unsigned int bit, unsigned int mods, bool down) {
   if (down) {
+    // a modifier pressed alone starts a new chord, even if we missed the release that should have ended the
+    // previous one (Win+L locks on the L key down: neither key up reaches the hook)
+    if ((mods & ~bit) == 0) { m_chord = 0; }
     m_chord |= mods;
     return false;
   }
@@ -285,6 +293,11 @@ void WindowsGlobalShortcutBackend::setCapturing(bool capturing) {
   std::scoped_lock lock(m_targetsMutex);
   m_capturing = capturing;
   m_chord = 0;
+}
+
+bool WindowsGlobalShortcutBackend::capturing() {
+  std::scoped_lock lock(m_targetsMutex);
+  return m_capturing;
 }
 
 void WindowsGlobalShortcutBackend::suppressNextKeyUp(unsigned int vk) {
