@@ -1,7 +1,8 @@
 # Local fork notes (personal Windows build; committed only in the personal fork, never part of upstream PRs)
 
 The user runs a locally built Vicinae on Windows with personal patches on top of upstream `main`.
-When they ask to "pull the latest changes", "update", or "rebase", follow the workflow below so the patches survive.
+When they ask to "pull the latest changes", "update", "merge" or "rebase", follow the workflow below so the patches
+survive.
 
 The fork on GitHub is public: keep usernames, absolute user paths and other personal details out of these files.
 Machine-specific settings go in `build-local.env.bat` (gitignored, see `build-local.bat`).
@@ -9,14 +10,14 @@ Machine-specific settings go in `build-local.env.bat` (gitignored, see `build-lo
 ## Remotes and branches
 
 - `origin`: upstream `vicinaehq/vicinae`. `fork`: the user's public GitHub fork.
-- `main` tracks `origin/main`. `patched` is `main` plus the patches below, one commit each, then the
-  `chore: local Windows build setup` commit. It's the branch that gets built and installed.
-- New patches go on `patched` as their own commit, below the `chore` commit.
-- To send a patch upstream, branch from `origin/main` and cherry-pick it:
-  `git switch -c fix/<topic> origin/main && git cherry-pick <sha>`. Patch 7 depends on patch 2.
-
-The `chore` commit holds these notes, `build-local.bat` and `mise.local.toml`. Keep it last on `patched` and leave it
-out of anything sent upstream.
+- `main` tracks `origin/main`. `patched` is `main` plus the patches below and the local build setup (these notes,
+  `build-local.bat`, `mise.local.toml`). It's the branch that gets built and installed.
+- Upstream is merged into `patched`, never rebased onto (the user's choice as of 2026-10-17: one conflict pass against
+  the final code, and existing commits keep their behavior). Don't rewrite `patched` history or force-push it.
+- New patches go on top of `patched` as their own commit. Up to 2026-10-17 the patches were kept as a linear stack,
+  one commit each, with `chore: local Windows build setup` last; history after that includes merge commits.
+- `git diff origin/main..patched` shows the full local delta (two dots). To send something upstream, build a clean
+  branch from `origin/main` based on that diff, leaving out the build setup files. Patch 7 depends on patch 2.
 
 ## Patches
 
@@ -70,19 +71,22 @@ out of anything sent upstream.
    `nativeCornerRadius()` is 0 (Windows 10 windows are square). Why: `DWMWA_BORDER_COLOR` is Windows 11 only, so on
    Windows 10 the launcher had no border and the theme's `main_window.border` did nothing. Good upstream PR candidate.
 
-Patches 1–4 had no matching upstream PR/issue as of 2026-10-07; 5–10 weren't checked. Once a patch is merged upstream,
-drop it from `patched`.
+Patches 1–4 had no matching upstream PR/issue as of 2026-10-07; 5–10 weren't checked. Once upstream ships a patch's
+change, the merge usually absorbs it; if upstream solved it differently, `git revert` the patch and remove its entry
+here.
 
 ## Update workflow
 
 ```
 git fetch origin
 git checkout patched
-git rebase origin/main            # resolve conflicts keeping the intent above
+git merge origin/main             # resolve conflicts keeping the intent above
 build-local.bat build             # run `build-local.bat configure` first if CMake files changed or the build dir is gone
 build-local.bat installer         # -> build-relwithdebinfo\vicinae-x64-setup.exe
-git push --force-with-lease fork patched
+git push fork patched
 ```
+
+Also fast-forward `main` to `origin/main` (`git branch -f main origin/main` while on `patched`).
 
 Format changed C++ with clang-format 23.1.0 (CI's pinned version): `pip install --target <dir> clang-format==23.1.0`,
 then run `<dir>\clang_format\data\bin\clang-format.exe` (the `<dir>\bin\clang-format.exe` wrapper fails without the
@@ -133,7 +137,7 @@ Run aqt from outside the repo, otherwise it drops `aqtinstall.log` into it.
 - Self-update is off for this build: `WindowsUpdateInstaller` requires a signed binary (CI signs releases; local builds
   aren't), so `checksSupported()` is false. No update checks, no notifications (log: "Running binary is not signed,
   self update is disabled"). Upstream releases never overwrite the patches automatically, but the user also isn't told
-  about them. Updating means rebase and rebuild.
+  about them. Updating means merge and rebuild.
 - Before running the installer, stop any dev-build server started from `build-relwithdebinfo\bin`: the installer's
   `CloseApplications=force` only closes processes running from the install folder.
 - To run a dev build without installing: put Qt `bin` on PATH and start `build-relwithdebinfo\bin\vicinae-server.exe`.
