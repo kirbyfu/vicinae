@@ -15,6 +15,7 @@ class WindowsWindowAttached : public QObject {
   Q_PROPERTY(QString appearance READ appearance WRITE setAppearance NOTIFY appearanceChanged)
   Q_PROPERTY(QColor borderColor READ borderColor WRITE setBorderColor NOTIFY borderColorChanged)
   Q_PROPERTY(bool acrylicSupported READ acrylicSupported CONSTANT)
+  Q_PROPERTY(bool nativeChromeSupported READ nativeChromeSupported CONSTANT)
   Q_PROPERTY(int nativeCornerRadius READ nativeCornerRadius CONSTANT)
 
 signals:
@@ -42,7 +43,10 @@ public:
   // DWMWA_SYSTEMBACKDROP_TYPE requires Windows 11 22H2.
   static bool acrylicSupported();
 
-  // DWM only rounds to fixed presets; DWMWCP_ROUND clips at 8dip.
+  // DWMWA_BORDER_COLOR and DWMWA_WINDOW_CORNER_PREFERENCE require Windows 11.
+  static bool nativeChromeSupported();
+
+  // DWM only rounds to fixed presets; DWMWCP_ROUND clips at 8dip. Windows 10 windows stay square.
   static int nativeCornerRadius();
 
 private:

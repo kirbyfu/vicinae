@@ -65,7 +65,14 @@ bool WindowsWindowAttached::acrylicSupported() {
 
 bool windowsAcrylicSupported() { return WindowsWindowAttached::acrylicSupported(); }
 
-int WindowsWindowAttached::nativeCornerRadius() { return DWM_ROUND_CORNER_RADIUS; }
+bool WindowsWindowAttached::nativeChromeSupported() {
+  static const bool supported = QOperatingSystemVersion::current() >= QOperatingSystemVersion::Windows11;
+  return supported;
+}
+
+int WindowsWindowAttached::nativeCornerRadius() {
+  return nativeChromeSupported() ? DWM_ROUND_CORNER_RADIUS : 0;
+}
 
 void WindowsWindowAttached::setEnabled(bool value) {
   if (m_enabled == value) return;

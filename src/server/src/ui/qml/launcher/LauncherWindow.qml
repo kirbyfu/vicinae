@@ -14,6 +14,7 @@ LauncherWindowBase {
     property bool blurEnabled: Config.blurEnabled
     property bool shadowEnabled: shadowPadding > 0
     property bool nativeChrome: false
+    property bool drawBorder: !nativeChrome
     property bool autoPlaceOnShow: true
     property Component contentEffect: null
     property Component searchBarComponent: SearchBar {
@@ -108,7 +109,7 @@ LauncherWindowBase {
         }
 
         SourceBlendRect {
-            visible: Launcher.compacted && !root.nativeChrome
+            visible: Launcher.compacted && root.drawBorder
             width: root._w
             height: root.appearance.searchBarHeight + 2 * root.appearance.contentInset
             radius: root.cornerRadius
@@ -199,7 +200,7 @@ LauncherWindowBase {
         }
 
         SourceBlendRect {
-            visible: !Launcher.compacted && !root.nativeChrome
+            visible: !Launcher.compacted && root.drawBorder
             anchors.fill: parent
             radius: root.cornerRadius
             overlay: true
