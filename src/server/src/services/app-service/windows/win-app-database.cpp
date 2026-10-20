@@ -607,8 +607,9 @@ WindowsAppDatabase::~WindowsAppDatabase() { m_uwpWatcher.reset(); }
 
 std::vector<fs::path> WindowsAppDatabase::defaultSearchPaths() const {
   std::vector<fs::path> paths;
-  if (auto common = knownFolder(FOLDERID_CommonPrograms)) paths.emplace_back(std::move(*common));
-  if (auto user = knownFolder(FOLDERID_Programs)) paths.emplace_back(std::move(*user));
+  // the Start Menu roots rather than their Programs subfolders: installers also drop shortcuts directly there
+  if (auto common = knownFolder(FOLDERID_CommonStartMenu)) paths.emplace_back(std::move(*common));
+  if (auto user = knownFolder(FOLDERID_StartMenu)) paths.emplace_back(std::move(*user));
   return paths;
 }
 
