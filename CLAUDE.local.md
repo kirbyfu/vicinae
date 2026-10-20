@@ -70,8 +70,13 @@ Machine-specific settings go in `build-local.env.bat` (gitignored, see `build-lo
    `LauncherWindowWindows.qml` sets `drawBorder` so `LauncherWindow.qml` draws its QML border ring, and
    `nativeCornerRadius()` is 0 (Windows 10 windows are square). Why: `DWMWA_BORDER_COLOR` is Windows 11 only, so on
    Windows 10 the launcher had no border and the theme's `main_window.border` did nothing. Good upstream PR candidate.
+11. `fix(windows): index shortcuts in the Start Menu root`
+   `WindowsAppDatabase::defaultSearchPaths()` returns `FOLDERID_CommonStartMenu` / `FOLDERID_StartMenu` instead of
+   their `Programs` subfolders; the recursive scan still covers `Programs`. Why: the Start menu also lists shortcuts
+   placed directly in `Start Menu` (Docker Desktop, SumatraPDF, WSL's Ubuntu), which vicinae never found. Good
+   upstream PR candidate.
 
-Patches 1–4 had no matching upstream PR/issue as of 2026-10-07; 5–10 weren't checked. Once upstream ships a patch's
+Patches 1–4 had no matching upstream PR/issue as of 2026-10-07; 5–11 weren't checked. Once upstream ships a patch's
 change, the merge usually absorbs it; if upstream solved it differently, `git revert` the patch and remove its entry
 here.
 
