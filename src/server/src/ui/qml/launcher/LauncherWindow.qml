@@ -25,6 +25,7 @@ LauncherWindowBase {
         windowRadius: root.cornerRadius
         windowHeight: root._h
         windowWidth: root._w
+        inset: root.appearance.contentInset
     }
     readonly property Item commandView: (commandStack.currentItem as LauncherPage)?.view ?? null
     statusBarOverlap: floatingStatusBar.visible && root.appearance.floatingStatusBar ? floatingStatusBar.height - root.appearance.contentInset : 0
@@ -116,6 +117,8 @@ LauncherWindowBase {
             overlay: true
             borderColor: Config.withAlpha(Theme.mainWindowBorder, Config.windowOpacity)
             borderWidth: Config.borderWidth
+            outerBorderColor: Config.withAlpha(Theme.mainWindowOuterBorder, Theme.mainWindowOuterBorder.a * Config.windowOpacity)
+            outerBorderWidth: root.appearance.outerBorderWidth
         }
 
         Rectangle {
@@ -206,6 +209,8 @@ LauncherWindowBase {
             overlay: true
             borderColor: Config.withAlpha(Theme.mainWindowBorder, Config.windowOpacity)
             borderWidth: Config.borderWidth
+            outerBorderColor: Config.withAlpha(Theme.mainWindowOuterBorder, Theme.mainWindowOuterBorder.a * Config.windowOpacity)
+            outerBorderWidth: root.appearance.outerBorderWidth
         }
 
         Loader {
