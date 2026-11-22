@@ -1,12 +1,10 @@
-#include "ui/quick/markdown-model.hpp"
-#include "services/font-service/font-service.hpp"
-#include "ui/image/image-url.hpp"
-#include "ui/quick/syntax-highlighter.hpp"
-#include "service-registry.hpp"
-#include "services/app-service/app-service.hpp"
-#include "theme/theme-file.hpp"
+#include <QtConcurrentRun>
+#include <algorithm>
+#include <mutex>
 #include <QClipboard>
 #include <QGuiApplication>
+#include <QBuffer>
+#include <QMimeData>
 #include <QRegularExpression>
 #include <QUrlQuery>
 #include <cmark-gfm.h>
@@ -15,6 +13,18 @@
 #include <pugixml/pugixml.hpp>
 #include <cstring>
 #include <utility>
+#include "ui/quick/markdown-model.hpp"
+#include "markdown-math.hpp"
+#include "services/font-service/font-service.hpp"
+#include "ui/image/image-url.hpp"
+#include "ui/image/image-stream.hpp"
+#include "services/clipboard/clipboard-service.hpp"
+#include "services/toast/toast-service.hpp"
+#include "ui/quick/syntax-highlighter.hpp"
+#include "service-registry.hpp"
+#include "services/app-service/app-service.hpp"
+#include "theme/theme-file.hpp"
+#include "theme/theme.hpp"
 
 namespace {
 
@@ -29,6 +39,27 @@ GfmNodeType getGfmNodeType(cmark_node *node) {
   if (std::strcmp(t, "table_row") == 0) return GfmNodeType::TableRow;
   if (std::strcmp(t, "table_cell") == 0) return GfmNodeType::TableCell;
   return GfmNodeType::Unknown;
+}
+
+bool isClosedFence(cmark_node *node, QByteArrayView markdown) {
+  const auto lineAt = [markdown](int line) {
+    qsizetype start = 0;
+    for (int current = 1; current < line; ++current) {
+      const auto next = markdown.indexOf('\n', start);
+      if (next < 0) return QByteArrayView{};
+      start = next + 1;
+    }
+    const auto end = markdown.indexOf('\n', start);
+    return markdown.sliced(start, (end < 0 ? markdown.size() : end) - start).trimmed();
+  };
+  const auto first = lineAt(cmark_node_get_start_line(node));
+  const auto last = lineAt(cmark_node_get_end_line(node));
+  if (first.isEmpty() || last.size() < 3 || cmark_node_get_start_line(node) == cmark_node_get_end_line(node))
+    return false;
+  const auto opening =
+      std::ranges::find_if(first, [first](char c) { return c != first.front(); }) - first.begin();
+  return (first.front() == '`' || first.front() == '~') && last.size() >= opening &&
+         std::ranges::all_of(last, [first](char c) { return c == first.front(); });
 }
 
 QString imageProviderUrl(const QString &rawUrl) {
@@ -57,15 +88,17 @@ QString imageProviderUrl(const QString &rawUrl) {
 
 struct InlineContext {
   const QString &inlineCodeFg;
-  const QString &inlineCodeBg;
   const QString &linkColor;
   const QString &textColor;
   const QString &monoFamily;
+  math::Resources &resources;
 };
 
 QString renderInlineHtml(cmark_node *node, const InlineContext &ctx);
+QString imageAltText(cmark_node *imageNode);
 
 QString renderOneInline(cmark_node *cur, const InlineContext &ctx) {
+  if (markdown_math::isMath(cur)) return markdown_math::render(cur, ctx.textColor, ctx.resources);
   QString result;
 
   switch (cmark_node_get_type(cur)) {
@@ -82,10 +115,8 @@ QString renderOneInline(cmark_node *cur, const InlineContext &ctx) {
     break;
 
   case CMARK_NODE_CODE:
-    result += QStringLiteral("<code style=\"color:%1;background:%2;"
-                             "padding:1px 4px;border-radius:3px;"
-                             "font-family:'%3',monospace;\">")
-                  .arg(ctx.inlineCodeFg, ctx.inlineCodeBg, ctx.monoFamily);
+    result += QStringLiteral("<code style=\"color:%1;font-family:'%2',monospace;font-size:small;\">")
+                  .arg(ctx.inlineCodeFg, ctx.monoFamily);
     result += QString::fromUtf8(cmark_node_get_literal(cur)).toHtmlEscaped();
     result += QStringLiteral("</code>");
     break;
@@ -110,9 +141,10 @@ QString renderOneInline(cmark_node *cur, const InlineContext &ctx) {
     break;
 
   case CMARK_NODE_IMAGE: {
-    auto src = imageProviderUrl(QString::fromUtf8(cmark_node_get_url(cur)));
-    auto alt = QString::fromUtf8(cmark_node_get_title(cur));
-    result += QStringLiteral("<img src=\"%1\" alt=\"%2\"/>").arg(src.toHtmlEscaped(), alt.toHtmlEscaped());
+    const auto src = QString::fromUtf8(cmark_node_get_url(cur));
+    const auto title = QString::fromUtf8(cmark_node_get_title(cur));
+    result += QStringLiteral("<img src=\"%1\" alt=\"%2\" title=\"%3\"/>")
+                  .arg(src.toHtmlEscaped(), imageAltText(cur).toHtmlEscaped(), title.toHtmlEscaped());
     break;
   }
 
@@ -280,15 +312,22 @@ void processHtmlNodes(pugi::xml_node node, HtmlBlockResult &result) {
 
 } // anonymous namespace
 
-MarkdownModel::MarkdownModel(QObject *parent) : QAbstractListModel(parent) {
+MarkdownModel::MarkdownModel(QObject *parent) : DocumentModel(parent) {
   rebuildInlineStyles();
   connect(&ThemeService::instance(), &ThemeService::themeChanged, this, [this]() {
     rebuildInlineStyles();
-    if (!m_markdown.isEmpty()) setMarkdown(m_markdown);
+    if (!m_markdown.isEmpty()) {
+      if (m_async)
+        setMarkdownAsync(m_markdown);
+      else
+        setMarkdown(m_markdown);
+    }
   });
 }
 
-int MarkdownModel::rowCount(const QModelIndex &) const { return static_cast<int>(m_blocks.size()); }
+int MarkdownModel::rowCount(const QModelIndex &parent) const {
+  return parent.isValid() ? 0 : static_cast<int>(m_blocks.size());
+}
 
 QVariant MarkdownModel::data(const QModelIndex &index, int role) const {
   if (!index.isValid() || index.row() < 0 || index.row() >= static_cast<int>(m_blocks.size())) return {};
@@ -312,22 +351,26 @@ QHash<int, QByteArray> MarkdownModel::roleNames() const {
 }
 
 void MarkdownModel::rebuildInlineStyles() {
+  ++m_styleGeneration;
   auto &theme = ThemeService::instance().theme();
-  m_inlineCodeFg = theme.resolve(SemanticColor::Foreground).name(QColor::HexRgb);
-  m_inlineCodeBg = theme.resolve(SemanticColor::SecondaryBackground).name(QColor::HexRgb);
-  m_linkColor = theme.resolve(SemanticColor::LinkDefault).name(QColor::HexRgb);
-  m_textColor = theme.resolve(SemanticColor::Foreground).name(QColor::HexRgb);
-  m_monoFamily = ServiceRegistry::instance()->fontService()->builtinMonoFontFamily();
-  m_syntaxStyles = syntax::buildStyleMap(theme);
+  m_styles.inlineCodeFg = theme.resolve(SemanticColor::Foreground).name(QColor::HexRgb);
+  m_styles.linkColor = theme.resolve(SemanticColor::LinkDefault).name(QColor::HexRgb);
+  m_styles.textColor = theme.resolve(SemanticColor::Foreground).name(QColor::HexRgb);
+  m_styles.monoFamily = ServiceRegistry::instance()->fontService()->builtinMonoFontFamily();
+  m_styles.syntax = syntax::buildStyleMap(theme);
+  m_styles.dark = theme.isDark();
 }
 
-std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &markdown) const {
+std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &markdown, const Styles &styles) {
   std::vector<Block> blocks;
-  blocks.reserve(m_blocks.size() + 4);
+  blocks.reserve(32);
 
-  auto buf = markdown.toUtf8();
-
-  cmark_gfm_core_extensions_ensure_registered();
+  static std::once_flag extensions;
+  std::call_once(extensions, [] {
+    cmark_gfm_core_extensions_ensure_registered();
+    markdown_math::extension();
+  });
+  const auto buf = markdown_math::normalizeDelimiters(markdown.toUtf8());
   cmark_parser *parser = cmark_parser_new(CMARK_OPT_DEFAULT);
 
   if (auto *tableExt = cmark_find_syntax_extension("table"))
@@ -335,13 +378,17 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
   if (auto *strikethroughExt = cmark_find_syntax_extension("strikethrough"))
     cmark_parser_attach_syntax_extension(parser, strikethroughExt);
 
+  cmark_parser_attach_syntax_extension(parser, markdown_math::extension());
+
   cmark_parser_feed(parser, buf.data(), buf.size());
   cmark_node *root = cmark_parser_finish(parser);
   cmark_parser_free(parser);
 
-  InlineContext ctx{m_inlineCodeFg, m_inlineCodeBg, m_linkColor, m_textColor, m_monoFamily};
-
   for (auto *node = cmark_node_first_child(root); node; node = cmark_node_next(node)) {
+    const auto firstBlock = blocks.size();
+    math::Resources resources;
+    resources.reserve(8);
+    InlineContext ctx{styles.inlineCodeFg, styles.linkColor, styles.textColor, styles.monoFamily, resources};
     auto type = cmark_node_get_type(node);
 
     switch (type) {
@@ -349,7 +396,7 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
       bool hasImage = false;
       for (auto *c = cmark_node_first_child(node); c; c = cmark_node_next(c)) {
         auto ct = cmark_node_get_type(c);
-        if (ct == CMARK_NODE_IMAGE) {
+        if (ct == CMARK_NODE_IMAGE || markdown_math::isDisplay(c)) {
           hasImage = true;
           break;
         }
@@ -365,7 +412,7 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
       if (!hasImage) {
         QVariantMap data;
         data[QStringLiteral("html")] = renderInlineChildren(node, ctx);
-        blocks.push_back({MdBlockType::Paragraph, data});
+        blocks.push_back({Markdown::BlockType::Paragraph, data});
         break;
       }
 
@@ -376,7 +423,7 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
         }
         QVariantMap data;
         data[QStringLiteral("html")] = run;
-        blocks.push_back({MdBlockType::Paragraph, data});
+        blocks.push_back({Markdown::BlockType::Paragraph, data});
         run.clear();
       };
 
@@ -384,9 +431,16 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
       for (auto *c = cmark_node_first_child(node); c; c = cmark_node_next(c)) {
         auto ct = cmark_node_get_type(c);
 
+        if (markdown_math::isDisplay(c)) {
+          flushRun(run);
+          blocks.emplace_back(
+              Block{Markdown::BlockType::Math,
+                    {{QStringLiteral("html"), markdown_math::render(c, ctx.textColor, ctx.resources)}}});
+          continue;
+        }
         if (ct == CMARK_NODE_IMAGE) {
           flushRun(run);
-          blocks.push_back({MdBlockType::Image, buildImageBlock(c)});
+          blocks.push_back({Markdown::BlockType::Image, buildImageBlock(c)});
           continue;
         }
 
@@ -396,7 +450,7 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
             flushRun(run);
             auto data = buildImageBlock(lc);
             data[QStringLiteral("link")] = QString::fromUtf8(cmark_node_get_url(c));
-            blocks.push_back({MdBlockType::Image, data});
+            blocks.push_back({Markdown::BlockType::Image, data});
             continue;
           }
         }
@@ -411,7 +465,7 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
       QVariantMap data;
       data[QStringLiteral("level")] = cmark_node_get_heading_level(node);
       data[QStringLiteral("html")] = renderInlineChildren(node, ctx);
-      blocks.push_back({MdBlockType::Heading, data});
+      blocks.push_back({Markdown::BlockType::Heading, data});
       break;
     }
 
@@ -423,29 +477,38 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
       data[QStringLiteral("code")] = code;
       auto *lang = cmark_node_get_fence_info(node);
       QString const language = lang ? QString::fromUtf8(lang) : QString();
+      if (language == "math" && isClosedFence(node, buf)) {
+        data[QStringLiteral("html")] =
+            markdown_math::render(code, "$$\n" + code + "\n$$", true, styles.textColor, ctx.resources);
+        blocks.emplace_back(Block{Markdown::BlockType::Math, std::move(data)});
+        break;
+      }
       data[QStringLiteral("language")] = language;
-      bool const isDark = ThemeService::instance().theme().isDark();
+      bool const isDark = styles.dark;
       data[QStringLiteral("highlightedHtml")] =
-          syntax::highlight(code, language, m_syntaxStyles, isDark, m_monoFamily);
-      blocks.push_back({MdBlockType::CodeBlock, data});
+          syntax::highlight(code, language, styles.syntax, isDark, styles.monoFamily);
+      blocks.push_back({Markdown::BlockType::CodeBlock, data});
       break;
     }
 
     case CMARK_NODE_LIST: {
       bool const ordered = (cmark_node_get_list_type(node) == CMARK_ORDERED_LIST);
       QVariantMap data;
-      data[QStringLiteral("items")] = buildListItems(node, ctx);
+      auto items = buildListItems(node, ctx);
+      int part = 0;
+      indexMarkdownList(items, part);
+      data[QStringLiteral("items")] = items;
       if (ordered) {
         data[QStringLiteral("startNumber")] = cmark_node_get_list_start(node);
-        blocks.push_back({MdBlockType::OrderedList, data});
+        blocks.push_back({Markdown::BlockType::OrderedList, data});
       } else {
-        blocks.push_back({MdBlockType::BulletList, data});
+        blocks.push_back({Markdown::BlockType::BulletList, data});
       }
       break;
     }
 
     case CMARK_NODE_THEMATIC_BREAK:
-      blocks.push_back({MdBlockType::HorizontalRule, {}});
+      blocks.push_back({Markdown::BlockType::HorizontalRule, {}});
       break;
 
     case CMARK_NODE_HTML_BLOCK: {
@@ -461,17 +524,17 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
         processHtmlNodes(root, result);
 
         for (auto &img : result.extractedImages)
-          blocks.push_back({MdBlockType::Image, img});
+          blocks.push_back({Markdown::BlockType::Image, img});
 
         if (!result.html.isEmpty()) {
           QVariantMap data;
           data[QStringLiteral("html")] = result.html;
-          blocks.push_back({MdBlockType::HtmlBlock, data});
+          blocks.push_back({Markdown::BlockType::HtmlBlock, data});
         }
       } else {
         QVariantMap data;
         data[QStringLiteral("html")] = html;
-        blocks.push_back({MdBlockType::HtmlBlock, data});
+        blocks.push_back({Markdown::BlockType::HtmlBlock, data});
       }
       break;
     }
@@ -508,9 +571,9 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
 
       if (!calloutType.isEmpty()) {
         data[QStringLiteral("calloutType")] = calloutType;
-        blocks.push_back({MdBlockType::Callout, data});
+        blocks.push_back({Markdown::BlockType::Callout, data});
       } else {
-        blocks.push_back({MdBlockType::Blockquote, data});
+        blocks.push_back({Markdown::BlockType::Blockquote, data});
       }
       break;
     }
@@ -601,9 +664,14 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
         }
         data[QStringLiteral("rows")] = rows;
 
-        blocks.push_back({MdBlockType::Table, data});
+        blocks.push_back({Markdown::BlockType::Table, data});
       }
       break;
+    }
+    if (!resources.empty()) {
+      const auto retained = std::make_shared<const math::Resources>(std::move(resources));
+      for (auto row = firstBlock; row < blocks.size(); ++row)
+        blocks[row].resources = retained;
     }
   }
 
@@ -612,54 +680,85 @@ std::vector<MarkdownModel::Block> MarkdownModel::parseBlocks(const QString &mark
 }
 
 void MarkdownModel::setMarkdown(const QString &markdown) {
-  // Incremental append: new content is a strict prefix-extension of old
-  if (!m_blocks.empty() && !m_markdown.isEmpty() && markdown.size() > m_markdown.size() &&
-      markdown.startsWith(m_markdown)) {
-    m_markdown = markdown;
-    auto newBlocks = parseBlocks(m_markdown);
-    auto oldCount = static_cast<int>(m_blocks.size());
-    auto newCount = static_cast<int>(newBlocks.size());
-
-    if (newCount >= oldCount) {
-      int divergeAt = oldCount;
-      if (oldCount > 0) {
-        auto &lastOld = m_blocks[oldCount - 1];
-        auto &lastNew = newBlocks[oldCount - 1];
-        if (lastOld.type != lastNew.type || lastOld.data != lastNew.data) divergeAt = oldCount - 1;
-      }
-
-      if (divergeAt < oldCount) {
-        beginRemoveRows({}, divergeAt, oldCount - 1);
-        m_blocks.erase(m_blocks.begin() + divergeAt, m_blocks.end());
-        endRemoveRows();
-      }
-
-      if (divergeAt < newCount) {
-        beginInsertRows({}, divergeAt, newCount - 1);
-        m_blocks.insert(m_blocks.end(), std::make_move_iterator(newBlocks.begin() + divergeAt),
-                        std::make_move_iterator(newBlocks.end()));
-        endInsertRows();
-      }
-
-      emit blocksAppended();
-      return;
-    }
+  static const QRegularExpression MATH_FENCE(QStringLiteral("(?:`{3,}|~{3,})[ \t]*math(?:\\s|$)"));
+  if (markdown.contains('$') || markdown.contains("\\(") || markdown.contains("\\[") ||
+      markdown.contains(MATH_FENCE)) {
+    setMarkdownAsync(markdown);
+    return;
   }
-
+  ++m_parseGeneration;
+  m_async = false;
   m_markdown = markdown;
+  applyBlocks(markdown, parseBlocks(markdown, m_styles));
+  setLoading(false);
+}
+
+void MarkdownModel::applyBlocks(const QString &markdown, std::vector<Block> blocks) {
+  const bool appended = !m_renderedMarkdown.isEmpty() && markdown.startsWith(m_renderedMarkdown);
+  m_renderedMarkdown = markdown;
+  if (appended) {
+    const int oldCount = static_cast<int>(m_blocks.size());
+    const int newCount = static_cast<int>(blocks.size());
+    emit blocksAppended();
+
+    int common = 0;
+    while (common < std::min(oldCount, newCount) && m_blocks[common].type == blocks[common].type) {
+      if (m_blocks[common].data != blocks[common].data) {
+        m_blocks[common] = std::move(blocks[common]);
+        emit dataChanged(index(common), index(common), {BlockDataRole});
+      }
+      ++common;
+    }
+    if (common < oldCount) {
+      beginRemoveRows({}, common, oldCount - 1);
+      m_blocks.erase(m_blocks.begin() + common, m_blocks.end());
+      endRemoveRows();
+    }
+    if (common < newCount) {
+      beginInsertRows({}, common, newCount - 1);
+      m_blocks.reserve(blocks.size());
+      m_blocks.insert(m_blocks.end(), std::make_move_iterator(blocks.begin() + common),
+                      std::make_move_iterator(blocks.end()));
+      endInsertRows();
+    }
+    return;
+  }
   beginResetModel();
-  m_blocks.clear();
-
-  if (!markdown.isEmpty()) m_blocks = parseBlocks(markdown);
-
+  m_blocks = std::move(blocks);
   endResetModel();
 }
 
-void MarkdownModel::clear() {
-  beginResetModel();
-  m_blocks.clear();
-  m_markdown.clear();
-  endResetModel();
+void MarkdownModel::setLoading(bool loading) {
+  if (m_loading == loading) return;
+  m_loading = loading;
+  emit loadingChanged();
+}
+
+void MarkdownModel::setMarkdownAsync(QString markdown) {
+  ++m_parseGeneration;
+  m_async = true;
+  m_markdown = std::move(markdown);
+  setLoading(true);
+  if (!m_parseRunning) startParse();
+}
+
+void MarkdownModel::startParse() {
+  m_parseRunning = true;
+  const auto generation = m_parseGeneration;
+  const auto styleGeneration = m_styleGeneration;
+  const auto markdown = m_markdown;
+  QtConcurrent::run([markdown, styles = m_styles] {
+    return parseBlocks(markdown, styles);
+  }).then(this, [this, generation, styleGeneration, markdown](std::vector<Block> blocks) {
+    m_parseRunning = false;
+    if (!m_async) return;
+    if (styleGeneration == m_styleGeneration && m_markdown.startsWith(markdown))
+      applyBlocks(markdown, std::move(blocks));
+    if (generation != m_parseGeneration)
+      startParse();
+    else
+      setLoading(false);
+  });
 }
 
 void MarkdownModel::openLink(const QString &url) {
@@ -667,11 +766,54 @@ void MarkdownModel::openLink(const QString &url) {
   if (!appDb->openTarget(url)) qWarning() << "MarkdownModel: failed to open link" << url;
 }
 
+void MarkdownModel::copyImage(const QString &source) {
+  const ImageURL url(source);
+  if (!url.isValid()) return;
+  if (m_copyStream) m_copyStream->deleteLater();
+  auto *stream = new ImageStream(url, {}, {.fallback = false}, this);
+  m_copyStream = stream;
+  const auto fail = [] {
+    ServiceRegistry::instance()->toastService()->failure(tr("Could not copy the image."));
+  };
+  connect(stream, &ImageStream::failed, this, [stream, fail] {
+    stream->deleteLater();
+    fail();
+  });
+  connect(stream, &ImageStream::frameReady, this, [this, stream, fail](const QImage &image) {
+    disconnect(stream, nullptr, this, nullptr);
+    stream->deleteLater();
+    QtConcurrent::run([image] {
+      QByteArray bytes;
+      QBuffer buffer(&bytes);
+      buffer.open(QIODevice::WriteOnly);
+      return image.save(&buffer, "PNG") ? std::optional(std::move(bytes)) : std::nullopt;
+    }).then(this, [fail](std::optional<QByteArray> bytes) {
+      if (!bytes) return fail();
+      auto *mime = new QMimeData;
+      mime->setData(QStringLiteral("image/png"), *bytes);
+      if (!ServiceRegistry::instance()->clipman()->copyQMimeData(mime, {.concealed = false})) fail();
+    });
+  });
+  stream->start();
+}
+
 QString MarkdownModel::copyCodeBlock(int blockIndex) {
   if (blockIndex < 0 || std::cmp_greater_equal(blockIndex, m_blocks.size())) return {};
   const auto &block = m_blocks[blockIndex];
-  if (block.type != MdBlockType::CodeBlock) return {};
+  if (block.type != Markdown::BlockType::CodeBlock) return {};
   auto code = block.data.value(QStringLiteral("code")).toString();
   QGuiApplication::clipboard()->setText(code);
   return code;
+}
+
+std::span<const DocumentPart> MarkdownModel::documentParts(int row) const {
+  const auto &block = m_blocks[row];
+  if (!block.parts) block.parts = markdownDocumentParts(block.type, block.data);
+  return *block.parts;
+}
+
+DocumentModel::TextSnapshot MarkdownModel::textSnapshot(int row) const {
+  const auto &block = m_blocks[row];
+  if (block.parts) return DocumentModel::textSnapshot(row);
+  return [type = block.type, data = block.data] { return markdownDocumentParts(type, data); };
 }

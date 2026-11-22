@@ -1,5 +1,14 @@
-#include "navigation-controller.hpp"
 #include <QTimer>
+#include <algorithm>
+#include <QGuiApplication>
+#include <QQuickItem>
+#include <chrono>
+#include <qlogging.h>
+#include <QProcessEnvironment>
+#include <ranges>
+#include <utility>
+#include "navigation-controller.hpp"
+#include "ui/windows/launcher-window-platform.hpp"
 #include "command/command-controller.hpp"
 #include "extension/extension-command.hpp"
 #include "service-registry.hpp"
@@ -12,13 +21,33 @@
 #include "ui/alert/alert.hpp"
 #include "ui/views/base-view.hpp"
 #include "utils/environment.hpp"
-#include <chrono>
-#include <qlogging.h>
-#include <QProcessEnvironment>
-#include <ranges>
-#include <utility>
 
-NavigationController::NavigationController(ApplicationContext &ctx) : m_ctx(ctx) {}
+NavigationController::NavigationController(ApplicationContext &ctx) : m_ctx(ctx) {
+  qApp->installEventFilter(this);
+  m_popToRootTimer.setSingleShot(true);
+  m_popToRootTimer.setTimerType(Qt::PreciseTimer);
+  connect(&m_popToRootTimer, &QTimer::timeout, this, &NavigationController::popToRootWhileClosed);
+}
+
+bool NavigationController::eventFilter(QObject *object, QEvent *event) {
+  if (m_toggleAnchor && event->type() == QEvent::MouseButtonRelease) {
+    QMetaObject::invokeMethod(
+        this,
+        [this] {
+          if (m_toggleAnchor && !m_windowActivated) closeWindow();
+        },
+        Qt::QueuedConnection);
+  }
+  return QObject::eventFilter(object, event);
+}
+
+void NavigationController::closeWindowOnFocusLoss() {
+  // Let the originating button finish its click before dismissing its command.
+  if (m_toggleAnchor && m_toggleAnchor->isVisible() && m_toggleAnchor->isEnabled() &&
+      LauncherWindowPlatform::isPointerPressOn(m_toggleAnchor))
+    return;
+  closeWindow();
+}
 
 void NavigationController::requestCompleterFocus() { emit completerFocusedRequested(); }
 
@@ -58,8 +87,8 @@ void NavigationController::broadcastSearchText(const QString &text, const BaseVi
 }
 
 void NavigationController::setSearchText(const QString &text, const BaseView *caller) {
-  broadcastSearchText(text, caller);
   if (caller == nullptr || caller == topView()) { emit searchTextTampered(text); }
+  broadcastSearchText(text, caller);
 }
 
 void NavigationController::setSearchPlaceholderText(const QString &text, const BaseView *caller) {
@@ -91,11 +120,20 @@ void NavigationController::showHud(const QString &title, const std::optional<Ima
   emit showHudRequested(title, icon);
 }
 
+void NavigationController::showDictationHud(DictationSession *session) {
+  emit dictationHudRequested(session);
+}
+
+void NavigationController::showActivityHud(HudActivity *activity) { emit activityHudRequested(activity); }
+
 void NavigationController::applyPopToRoot(const PendingPopToRoot &settings) {
   auto resolveApplicablePopToRoot = [&]() {
-    if (settings.type == PopToRootType::Default)
-      return m_popToRootOnClose ? PopToRootType::Immediate : PopToRootType::Suspended;
-    return settings.type;
+    if (settings.type != PopToRootType::Default) return settings.type;
+    if (m_popToRootOnClose) return PopToRootType::Immediate;
+    if (m_popToRootTimeout && std::chrono::system_clock::now() - settings.closedAt >= *m_popToRootTimeout) {
+      return PopToRootType::Immediate;
+    }
+    return PopToRootType::Suspended;
   };
 
   PopToRootType const popToRootType = resolveApplicablePopToRoot();
@@ -279,6 +317,7 @@ void NavigationController::popCurrentView() {
 }
 
 void NavigationController::popToRoot(const PopToRootOptions &opts) {
+  m_toggleAnchor = nullptr;
   m_pendingPopToRoot.reset();
   if (!m_frames.empty() && m_frames.back()->viewCount == 0) { m_frames.pop_back(); }
 
@@ -315,12 +354,39 @@ QString NavigationController::navigationTitle(const BaseView *caller) const {
 
 void NavigationController::setPopToRootOnClose(bool value) { m_popToRootOnClose = value; }
 
+void NavigationController::setPopToRootTimeout(std::optional<std::chrono::seconds> timeout) {
+  m_popToRootTimeout = timeout;
+}
+
+void NavigationController::schedulePopToRootWhileClosed() {
+  m_popToRootTimer.stop();
+  if (m_windowOpened || !m_pendingPopToRoot || m_pendingPopToRoot->type != PopToRootType::Default) return;
+  if (m_popToRootOnClose || !m_popToRootTimeout) return;
+
+  auto const elapsed = std::chrono::system_clock::now() - m_pendingPopToRoot->closedAt;
+  auto const remaining = std::chrono::ceil<std::chrono::milliseconds>(*m_popToRootTimeout - elapsed);
+  m_popToRootTimer.start(std::max(remaining, std::chrono::milliseconds{0}));
+}
+
+void NavigationController::popToRootWhileClosed() {
+  if (m_windowOpened || !m_pendingPopToRoot || m_pendingPopToRoot->type != PopToRootType::Default) return;
+
+  if (!m_frames.empty() && m_frames.back()->viewCount == 0) {
+    if (isRootSearch()) clearSearchText();
+    return;
+  }
+
+  popToRoot({.clearSearch = true});
+}
+
 void NavigationController::closeWindow(const CloseWindowOptions &settings, std::chrono::milliseconds delay) {
   QTimer::singleShot(delay, [this, settings]() { closeWindow(settings); });
 }
 
 void NavigationController::closeWindow(const CloseWindowOptions &settings) {
   if (!m_windowOpened) return;
+
+  m_toggleAnchor = nullptr;
 
   PopToRootType type = settings.popToRootType;
 
@@ -330,14 +396,17 @@ void NavigationController::closeWindow(const CloseWindowOptions &settings) {
     m_instantDismiss = false;
   }
 
-  m_pendingPopToRoot = PendingPopToRoot{.type = type, .clearSearch = settings.clearRootSearch};
+  m_pendingPopToRoot = PendingPopToRoot{
+      .type = type, .clearSearch = settings.clearRootSearch, .closedAt = std::chrono::system_clock::now()};
   m_windowOpened = false;
   emit windowVisiblityChanged(false);
+  schedulePopToRootWhileClosed();
 }
 
 void NavigationController::releaseSuspendedClose() {
   if (m_pendingPopToRoot && m_pendingPopToRoot->type == PopToRootType::Suspended) {
     m_pendingPopToRoot->type = PopToRootType::Default;
+    schedulePopToRootWhileClosed();
   }
 }
 
@@ -348,7 +417,7 @@ void NavigationController::setCloseOnFocusLoss(bool value) { m_closeOnFocusLoss 
 void NavigationController::setWindowActivated(bool value) {
   if (m_windowActivated == value) return;
 
-  if (!value && m_closeOnFocusLoss) { closeWindow(); }
+  if (!value && m_closeOnFocusLoss) { closeWindowOnFocusLoss(); }
 
   m_windowActivated = value;
   emit windowActivationChanged(value);
@@ -518,6 +587,7 @@ size_t NavigationController::viewStackSize() const { return m_views.size(); }
 
 void NavigationController::showWindow() {
   if (m_windowOpened) return;
+  m_popToRootTimer.stop();
   if (auto popToRoot = m_pendingPopToRoot) {
     applyPopToRoot(*popToRoot);
     m_pendingPopToRoot.reset();
@@ -619,6 +689,22 @@ bool NavigationController::activateEntrypoint(const EntrypointId &id,
     return true;
   }
 
+  // A builtin without a view runs and returns, so from outside the launcher it has no reason to reset it.
+  if (const auto *item = dynamic_cast<const CommandRootItem *>(entrypoint);
+      item && options.props.source != LaunchSource::Launcher && item->command()->isNoView() &&
+      item->command()->type() == CommandTypeBuiltin) {
+    const auto *previousTop = topView();
+    m_ctx.services->rootItemManager()->registerVisit(id);
+    launch(item->command(), options.props);
+    if (!m_frames.empty() && m_frames.back()->viewCount == 0) { m_frames.pop_back(); }
+    if (topView() != previousTop && !initialOpenState) {
+      setInstantDismiss();
+      setBackButtonVisibility(false);
+      showWindow();
+    }
+    return true;
+  }
+
   popToRoot({.clearSearch = false});
 
   // programmatic activation bypasses the action execution funnel, so the view hook
@@ -645,6 +731,8 @@ bool NavigationController::activateEntrypoint(const EntrypointId &id,
 
   if (auto fallback = options.props.fallbackText) { setSearchText(fallback.value()); }
 
+  m_toggleAnchor = options.toggleAnchor;
+
   if (!isRootSearch() && !initialOpenState) {
     setInstantDismiss();
     setBackButtonVisibility(false);
@@ -656,7 +744,9 @@ bool NavigationController::activateEntrypoint(const EntrypointId &id,
 
 void NavigationController::releaseEntrypoint(const EntrypointId &id) {
   const auto *entrypoint = m_ctx.services->rootItemManager()->findItemById(id);
-  if (auto *ext = dynamic_cast<const CommandRootItem *>(entrypoint)) { ext->command()->shortcutReleased(); }
+  if (auto *ext = dynamic_cast<const CommandRootItem *>(entrypoint)) {
+    ext->command()->shortcutReleased(m_ctx);
+  }
 }
 
 void NavigationController::launch(const std::shared_ptr<AbstractCmd> &cmd) {

@@ -164,7 +164,18 @@ bool Manager::writeUser(const Partial<ConfigValue> &cfg) {
   }
 
   std::error_code ec;
-  fs::path tmp = m_userPath;
+  fs::path target = m_userPath;
+
+  // Write through symlinks instead of replacing them
+  if (fs::is_symlink(m_userPath, ec)) {
+    target = fs::canonical(m_userPath, ec);
+    if (ec) {
+      qWarning() << "Failed to resolve config symlink" << m_userPath.string().c_str() << ec.message().c_str();
+      return false;
+    }
+  }
+
+  fs::path tmp = target;
 
   tmp += ".tmp";
 
@@ -179,7 +190,7 @@ bool Manager::writeUser(const Partial<ConfigValue> &cfg) {
     }
   }
 
-  fs::rename(tmp, m_userPath, ec);
+  fs::rename(tmp, target, ec);
 
   if (ec) {
     fs::remove(tmp, ec);
@@ -336,7 +347,24 @@ void Manager::prunePartial(Partial<ConfigValue> &user) {
         if (entrypoints.empty()) { v.entrypoints.reset(); }
       }
 
-      if (!v.enabled && v.preferences.value_or(glz::generic::object_t{}).empty() && !v.entrypoints) {
+      if (v.tools) {
+        auto &tools = *v.tools;
+        for (auto tool = tools.begin(); tool != tools.end();) {
+          auto &data = tool->second;
+          if (data.preferences) {
+            prunePreferences(*data.preferences);
+            if (data.preferences->empty()) data.preferences.reset();
+          }
+          if (!data.policy && !data.preferences)
+            tool = tools.erase(tool);
+          else
+            ++tool;
+        }
+        if (tools.empty()) v.tools.reset();
+      }
+
+      if (!v.enabled && v.preferences.value_or(glz::generic::object_t{}).empty() && !v.entrypoints &&
+          !v.tools) {
         pvd.erase(currentIt);
       }
     }

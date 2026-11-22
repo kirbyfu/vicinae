@@ -6,7 +6,6 @@
  */
 
 export {
-	AI,
 	Alert,
 	Cache,
 	Color,
@@ -58,6 +57,7 @@ export {
 	showInFinder,
 } from "./system.js";
 export {
+	AI,
 	MenuBarExtra,
 	unsupported,
 } from "./unsupported.js";

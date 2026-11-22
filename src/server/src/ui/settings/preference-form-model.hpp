@@ -6,6 +6,7 @@
 #include "common/entrypoint.hpp"
 #include <QAbstractListModel>
 #include <QTimer>
+#include <QUrl>
 #include <vector>
 
 class PreferenceFormModel : public QAbstractListModel {
@@ -28,7 +29,8 @@ public:
     MultipleRole,
     CanChooseFilesRole,
     CanChooseDirectoriesRole,
-    LockedPathsRole
+    LockedPathsRole,
+    ComponentRole
   };
 
   explicit PreferenceFormModel(QObject *parent = nullptr);
@@ -40,8 +42,10 @@ public:
 
   void load(const EntrypointId &id, const std::vector<Preference> &preferences);
   void loadProvider(const QString &providerId, const std::vector<Preference> &preferences);
+  void loadTool(const EntrypointId &id, const PreferenceList &preferences);
 
   Q_INVOKABLE void setFieldValue(int row, const QVariant &value);
+  Q_INVOKABLE QUrl componentFor(const QString &fieldId) const;
 
 private:
   void save();
@@ -60,18 +64,21 @@ private:
     bool canChooseFiles = true;
     bool canChooseDirectories = false;
     QStringList lockedPaths;
+    QUrl component;
   };
 
-  Field createField(const Preference &pref);
+  Field createField(const Preference &pref, const PreferenceValues &values);
   void clearFields();
   CompletionModel *appModel();
   static QVariant currentDropdownItem(const Field &f);
 
   std::vector<Field> m_fields;
   AppSelectorModel *m_appModel = nullptr;
-  PreferenceValues m_values;
+  PreferenceValues m_pendingValues;
   EntrypointId m_itemId;
   QString m_providerId;
-  bool m_isProvider = false;
+  enum class Scope { Item, Provider, Tool };
+  Scope m_scope = Scope::Item;
+  PreferenceList m_toolPreferences;
   QTimer m_saveTimer;
 };

@@ -7,6 +7,8 @@ class CommandController;
 class ServiceRegistry;
 class OverlayController;
 class SettingsController;
+class ChatWindowController;
+class AiCommandRunner;
 
 /**
  * Global object that can be used to access global vicinae state (services, navigation utils...)
@@ -16,4 +18,6 @@ struct ApplicationContext : NonCopyable {
   std::unique_ptr<OverlayController> overlay;
   ServiceRegistry *services;
   std::unique_ptr<SettingsController> settings;
+  std::unique_ptr<ChatWindowController> chat;
+  std::unique_ptr<AiCommandRunner> aiCommands;
 };

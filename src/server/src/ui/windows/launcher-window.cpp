@@ -25,6 +25,12 @@
 #include "ui/windows/overlay-controller.hpp"
 #include "builtins/vicinae/bug-report-url.hpp"
 #include "builtins/vicinae/vicinae-store-view-host.hpp"
+#include "builtins/ai/ai.hpp"
+#include "builtins/ai/ai.hpp"
+#include "services/ai/ai-preferences.hpp"
+#include "services/ai/ai-service.hpp"
+#include "services/ai/ai-service.hpp"
+#include "services/root-item-manager/root-item-manager.hpp"
 #include "ui/settings/settings-controller.hpp"
 #include "services/toast/toast-service.hpp"
 #include "services/update/update-service.hpp"
@@ -44,6 +50,7 @@
 #include <QScreen>
 #include <QWindow>
 #include <QKeyEvent>
+#include <utility>
 #include <qcoreevent.h>
 #include <qlogging.h>
 #include <algorithm>
@@ -86,6 +93,18 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
   updateLayerShellProps();
   buildFooterMenu();
 
+  auto *services = m_ctx.services;
+  connect(services->ai(), &AI::Service::modelsChanged, this, &LauncherWindow::refreshQuickAIAvailability);
+  connect(services->config(), &config::Manager::configChanged, this,
+          &LauncherWindow::refreshQuickAIAvailability);
+  connect(services->rootItemManager(), &RootItemManager::itemsChanged, this,
+          &LauncherWindow::refreshQuickAIAvailability);
+  connect(m_ctx.navigation.get(), &NavigationController::searchTextTampered, this,
+          [this](const QString &text) { updateCanAskAI(text); });
+  connect(this, &LauncherWindow::atRootChanged, this, [this] { updateCanAskAI(); });
+  connect(this, &LauncherWindow::completerChanged, this, [this] { updateCanAskAI(); });
+  refreshQuickAIAvailability();
+
   m_commandHoldTimer.setSingleShot(true);
   m_commandHoldTimer.setInterval(COMMAND_HOLD_DELAY);
   connect(&m_commandHoldTimer, &QTimer::timeout, this, [this]() { setCommandHeld(true); });
@@ -112,6 +131,14 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
 
   connect(nav, &NavigationController::currentViewChanged, this,
           [this](const NavigationController::ViewState &) { handleCurrentViewChanged(); });
+
+  auto cloakIfHidden = [this]() {
+    if (!m_window || m_window->isVisible() || m_cloakedWhileHidden) return;
+    LauncherWindowPlatform::cloak(m_window);
+    m_cloakedWhileHidden = true;
+  };
+  connect(nav, &NavigationController::currentViewChanged, this, cloakIfHidden);
+  connect(nav, &NavigationController::searchTextTampered, this, cloakIfHidden);
 
   connect(nav, &NavigationController::loadingChanged, this, [this](bool loading) {
     if (m_isLoading != loading) {
@@ -257,7 +284,11 @@ LauncherWindow::LauncherWindow(ApplicationContext &ctx, QObject *parent)
   connect(nav, &NavigationController::invalidCompletionFired, this,
           &LauncherWindow::completerValidationFailed);
 
-  if (m_hudBridge) { connect(nav, &NavigationController::showHudRequested, m_hudBridge, &HudBridge::show); }
+  if (m_hudBridge) {
+    connect(nav, &NavigationController::showHudRequested, m_hudBridge, &HudBridge::show);
+    connect(nav, &NavigationController::dictationHudRequested, m_hudBridge, &HudBridge::showDictation);
+    connect(nav, &NavigationController::activityHudRequested, m_hudBridge, &HudBridge::showActivity);
+  }
 
   auto *toast = m_ctx.services->toastService();
   connect(toast, &ToastService::toastActivated, this, [this](const Toast *t) {
@@ -386,7 +417,12 @@ void LauncherWindow::handleVisibilityChanged(bool visible) {
   if (visible) {
     applyWindowConfig();
     tryCompaction();
+    // On macOS the QML window has already made itself visible, and show() would also reset the window
+    // state: AppKit reports the fixed-size panel as zoomed, so Qt would animate an un-zoom that blocks
+    // for ~40 ms and can move the window.
+#ifndef Q_OS_MACOS
     m_window->show();
+#endif
     m_window->raise();
     LauncherWindowPlatform::grantForeground();
     m_window->requestActivate();
@@ -448,9 +484,16 @@ void LauncherWindow::loadRoot() {
       if (m_pendingLauncherFileChoice || LauncherWindowPlatform::foregroundLent()) return;
       m_ctx.navigation->setWindowActivated(m_window->isActive());
     });
+    connect(m_window, &QWindow::visibleChanged, this, [this](bool visible) {
+      if (visible && std::exchange(m_cloakedWhileHidden, false)) {
+        LauncherWindowPlatform::uncloakAfterNextFrame(m_window);
+      }
+    });
     m_window->installEventFilter(this);
   }
 }
+
+bool LauncherWindow::foregroundLent() { return LauncherWindowPlatform::foregroundLent(); }
 
 void LauncherWindow::unloadRoot() {
   if (m_dragOverlayVisible) endWindowDrag();
@@ -504,6 +547,7 @@ void LauncherWindow::handleCurrentViewChanged() {
   updateWindowTitle();
 
   bool const isRoot = nav->viewStackSize() == 1;
+
   if (m_atRoot != isRoot) {
     m_atRoot = isRoot;
     emit atRootChanged();
@@ -594,7 +638,43 @@ void LauncherWindow::applyPendingWindowTitle(int framesRemaining) {
 
 void LauncherWindow::forwardSearchText(const QString &text) {
   m_ctx.navigation->broadcastSearchText(text);
+  updateCanAskAI();
   tryCompaction();
+}
+
+void LauncherWindow::handleTab() {
+  if (!m_canAskAI || !m_ctx.navigation->isRootSearch()) return;
+
+  m_ctx.navigation->activateEntrypoint(
+      EntrypointId{std::string(QuickAI::REPOSITORY_ID), std::string(QuickAI::COMMAND_ID)},
+      {.props = {.fallbackText = m_ctx.navigation->searchText()}});
+}
+
+QVariantList LauncherWindow::askAITokens() const { return Keyboard::Shortcut(Qt::Key_Tab).toDisplayTokens(); }
+
+void LauncherWindow::refreshQuickAIAvailability() {
+  auto *services = m_ctx.services;
+  const EntrypointId id{std::string(QuickAI::REPOSITORY_ID), std::string(QuickAI::COMMAND_ID)};
+  const auto &providers = services->config()->value().providers;
+  const auto provider = providers.find(id.provider);
+  auto *root = services->rootItemManager();
+
+  const bool enabled = (provider == providers.end() || provider->second.enabled.value_or(true)) &&
+                       root->itemMetadata(id).enabled;
+  const auto model = AI::defaultModel(*services->config());
+
+  m_quickAIAvailable = enabled && model && services->ai()->isAvailable(*model, AI::Capability::Completion);
+  updateCanAskAI();
+}
+
+void LauncherWindow::updateCanAskAI() { updateCanAskAI(m_ctx.navigation->searchText()); }
+
+void LauncherWindow::updateCanAskAI(const QString &searchText) {
+  // Tab moves focus to the argument fields when the selected item has some.
+  const bool value = m_quickAIAvailable && m_atRoot && !m_hasCompleter && !searchText.isEmpty();
+  if (value == m_canAskAI) return;
+  m_canAskAI = value;
+  emit canAskAIChanged();
 }
 
 bool LauncherWindow::forwardKey(int rawKey, int modifiers, int scanCode) {
@@ -748,20 +828,8 @@ void LauncherWindow::applyShowPlacement() {
   if (!restoreWindowPosition()) positionOnCursorScreen();
 }
 
-// AppKit shifts this panel ~40px upward after orderFront (source unidentified, immune to
-// animationBehavior=None), hence: show at opacity 0, re-assert placement next tick, reveal.
 void LauncherWindow::prepareShow() {
-  if (!m_window) return;
-  m_window->setOpacity(0.0);
-  applyShowPlacement();
-}
-
-void LauncherWindow::finalizeShow() {
-  QTimer::singleShot(0, this, [this]() {
-    if (!m_window) return;
-    applyShowPlacement();
-    m_window->setOpacity(1.0);
-  });
+  if (m_window) applyShowPlacement();
 }
 
 void LauncherWindow::beginWindowDrag() {

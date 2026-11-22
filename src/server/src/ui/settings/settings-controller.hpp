@@ -15,7 +15,9 @@ public:
   void openWindow();
   bool closeWindow(bool destroy = true);
   void openExtensionPreferences(const EntrypointId &id);
+  void openToolPreferences(const EntrypointId &id);
   void openTab(const QString &tabId);
+  void openSubpage(const QString &providerId, const QString &subpage);
 
 private:
   void createSettingsWindow();

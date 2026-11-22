@@ -21,7 +21,6 @@ public:
   void setCapturing(bool capturing) override;
 
   bool dispatchKey(unsigned int vk, unsigned int mods, bool down);
-  bool capturing();
 
   static void suppressNextKeyUp(unsigned int vk);
 

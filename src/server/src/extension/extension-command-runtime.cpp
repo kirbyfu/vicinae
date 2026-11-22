@@ -1,4 +1,6 @@
+#include <chrono>
 #include "extension-command-runtime.hpp"
+#include "extension/extension-preferences.hpp"
 #include "command/command-types.hpp"
 #include "common/context.hpp"
 #include "extension/views/extension-error-view-host.hpp"
@@ -13,6 +15,7 @@
 #include "extension/api/ui-service.hpp"
 #include "extension/api/wm-service.hpp"
 #include "extension/api/wallpaper-service.hpp"
+#include "extension/api/ai-service.hpp"
 #include "generated/tsapi.hpp"
 #include "glaze-qt.hpp"
 #include "service-registry.hpp"
@@ -52,8 +55,16 @@ void ExtensionCommandRuntime::initialize() {
 
   auto *eventCore = new ExtEventCoreService(*m_transport);
   auto *app = new ExtApplicationService(*m_transport, *services->appDb());
-  auto *ui = new ExtUIService(*m_transport, context()->navigation.get(), m_command, eventCore,
-                              *services->toastService(), *services->selectionService());
+  m_ui = new ExtUIService(*m_transport, context()->navigation.get(), m_command, eventCore,
+                          *services->toastService(), *services->selectionService());
+  if (m_headless) {
+    m_timeout.setSingleShot(true);
+    m_timeout.setInterval(HEADLESS_TIMEOUT);
+    connect(&m_timeout, &QTimer::timeout, this, [this] {
+      cancel(QCoreApplication::translate("ExtensionCommandRuntime", "The command timed out.").toStdString());
+    });
+    m_timeout.start();
+  }
   auto *wm = new ExtWindowManagementService(*m_transport, *services->windowManager(), *services->appDb(),
                                             *services->appRuntime(), *ctx.navigation);
   auto *clipboard = new ExtClipboardService(*m_transport, *services->clipman(), *services->pasteService());
@@ -64,9 +75,10 @@ void ExtensionCommandRuntime::initialize() {
   auto *oauth = new ExtOAuthService(*m_transport, m_command->extensionId(), ctx);
   auto wallpaper = new ExtWallpaperService(*m_transport, *services->wallpaperManager());
   auto browserExtension = new ExtBrowserExtensionService(*m_transport, *services->browserExtension());
+  auto *ai = new ExtensionAIRouter(*m_transport, *services->ai(), *services->config());
 
-  m_server = new tsapi::Server(*m_transport, app, ui, wm, clipboard, storage, fileSearch, command, oauth,
-                               wallpaper, browserExtension, eventCore);
+  m_server = new tsapi::Server(*m_transport, app, m_ui, wm, clipboard, storage, fileSearch, command, oauth,
+                               wallpaper, browserExtension, eventCore, ai);
   m_server->setLogger(m_logger.get());
   m_server->setParent(this);
 }
@@ -74,11 +86,9 @@ void ExtensionCommandRuntime::initialize() {
 // app pickers are stored as app ids, but extensions expect the `Application` shape of the applications API
 PreferenceValues ExtensionCommandRuntime::resolvePreferenceValues(PreferenceValues values) const {
   auto *appDb = context()->services->appDb();
-  auto *rootItemManager = context()->services->rootItemManager();
 
-  const auto resolve = [&](const glz::generic &v) -> glz::generic {
-    if (!v.is_string()) return {};
-    auto app = appDb->findById(QString::fromStdString(v.get_string()));
+  const auto resolve = [&](const std::string &id) -> glz::generic {
+    auto app = appDb->findById(QString::fromStdString(id));
     if (!app) return {};
     return glz::generic::object_t{
         {"id", app->id().toStdString()},
@@ -88,35 +98,23 @@ PreferenceValues ExtensionCommandRuntime::resolvePreferenceValues(PreferenceValu
     };
   };
 
-  for (const auto &pref : rootItemManager->getMergedItemPreferences(m_command->uniqueId())) {
-    auto data = pref.data();
-    auto *picker = std::get_if<Preference::AppPickerData>(&data);
-    if (!picker) continue;
-    auto it = values.find(pref.name().toStdString());
-    if (it == values.end()) continue;
-
-    if (picker->multiple) {
-      glz::generic::array_t apps;
-      if (it->second.is_array()) {
-        for (const auto &id : it->second.get_array()) {
-          if (auto app = resolve(id); !app.is_null()) apps.emplace_back(std::move(app));
-        }
-      }
-      it->second = std::move(apps);
-    } else {
-      it->second = resolve(it->second);
-    }
-  }
-
-  return values;
+  return preferences::resolveApplications(std::move(values), m_command->mergedPreferences(), resolve);
 }
 
 void ExtensionCommandRuntime::load(const LaunchProps &props) {
   initialize();
 
-  auto rootItemManager = context()->services->rootItemManager();
-  auto preferenceValues =
-      resolvePreferenceValues(rootItemManager->getPreferenceValues(m_command->uniqueId()));
+  const auto preferenceValues =
+      resolvePreferenceValues(m_command->preferenceValues(*context()->services->rootItemManager()));
+
+  if (const auto missing = missingRequiredPreference(preferenceValues); m_headless && missing) {
+    cancel(QCoreApplication::translate("ExtensionCommandRuntime",
+                                       "Set the \"%1\" preference in extension settings first.")
+               .arg(QString::fromStdString(*missing))
+               .toStdString());
+    return;
+  }
+
   auto manager = context()->services->extensionManager();
   manager::LoadOptions opts;
 
@@ -136,8 +134,14 @@ void ExtensionCommandRuntime::load(const LaunchProps &props) {
   }
 
   opts.entrypoint = m_command->manifest().entrypoint.string();
-  opts.mode = m_command->mode() == CommandMode::CommandModeView ? manager::CommandMode::View
-                                                                : manager::CommandMode::NoView;
+
+  if (m_toolCall) {
+    opts.mode = manager::CommandMode::Tool;
+  } else if (m_command->mode() == CommandMode::CommandModeView) {
+    opts.mode = manager::CommandMode::View;
+  } else {
+    opts.mode = manager::CommandMode::NoView;
+  }
 
   opts.cwd = props.cwd.transform([](const QString &s) { return s.toStdString(); });
   opts.fallbackText = props.fallbackText.transform([](const QString &s) { return s.toStdString(); });
@@ -147,13 +151,18 @@ void ExtensionCommandRuntime::load(const LaunchProps &props) {
   opts.extension_name = m_command->repositoryName().toStdString();
   opts.owner_or_author_name = m_command->author().toStdString();
   opts.is_raycast = m_command->isRaycast();
-  opts.preferences = std::move(preferenceValues);
+  opts.preferences = preferenceValues;
   opts.launch_context = props.launchContext;
-  opts.arguments = props.arguments |
-                   std::views::transform([](auto &&pair) -> std::pair<std::string, std::string> {
-                     return {pair.first.toStdString(), pair.second.toStdString()};
-                   }) |
-                   std::ranges::to<std::unordered_map<std::string, std::string>>();
+
+  if (m_toolCall) {
+    opts.arguments = m_toolCall->input;
+  } else {
+    opts.arguments = props.arguments |
+                     std::views::transform([](auto &&pair) -> std::pair<std::string, std::string> {
+                       return {pair.first.toStdString(), pair.second.toStdString()};
+                     }) |
+                     std::ranges::to<std::unordered_map<std::string, std::string>>();
+  }
 
   // these probes run on the UI thread, so flag any that are slow enough to freeze the launcher
   QElapsedTimer probeTimer;
@@ -200,6 +209,7 @@ void ExtensionCommandRuntime::load(const LaunchProps &props) {
 
             qCritical() << "Got crash" << reason;
 
+            finish(std::unexpected(reason));
             if (m_headless) return;
 
             auto &nav = context()->navigation;
@@ -216,10 +226,22 @@ void ExtensionCommandRuntime::load(const LaunchProps &props) {
 
       if (!res) {
         qWarning() << "Failed to load extension" << res.error();
+        finish(std::unexpected(res.error()));
       } else {
         m_sessionId = res->session_id;
         m_bus->setSessionId(m_sessionId);
-        manager->client().manager()->ready(res->session_id);
+        manager->client()
+            .manager()
+            ->ready(res->session_id)
+            .then(this, [this](const std::expected<manager::LaunchResult, std::string> &launch) {
+              if (!launch) {
+                finish(std::unexpected(launch.error()));
+              } else if (launch->error) {
+                finish(std::unexpected(*launch->error));
+              } else {
+                finish(launch->output.value_or(""));
+              }
+            });
       }
     }
 
@@ -227,6 +249,24 @@ void ExtensionCommandRuntime::load(const LaunchProps &props) {
   });
 
   watcher->setFuture(manager->client().manager()->load(opts));
+}
+
+std::optional<std::string>
+ExtensionCommandRuntime::missingRequiredPreference(const PreferenceValues &values) const {
+  for (const auto &pref : m_command->mergedPreferences()) {
+    if (!pref.required()) continue;
+    const auto *value = preferences::find(values, pref.name().toStdString());
+    if (!value || preferences::isEmpty(*value)) return pref.title().toStdString();
+  }
+  return std::nullopt;
+}
+
+void ExtensionCommandRuntime::finish(RunResult result) {
+  if (!m_onFinished) return;
+  m_timeout.stop();
+  std::exchange(m_onFinished, nullptr)(std::move(result));
+  unload();
+  deleteLater();
 }
 
 void ExtensionCommandRuntime::unload() {
@@ -240,7 +280,7 @@ void ExtensionCommandRuntime::unload() {
     if (current->priority() == ToastStyle::Dynamic) toast->clear();
   }
 
-  manager->client().manager()->unload(m_sessionId);
+  if (!m_sessionId.empty()) manager->client().manager()->unload(m_sessionId);
 
   if (!m_headless) context()->navigation->setNavigationSuffixIcon(std::nullopt);
 }

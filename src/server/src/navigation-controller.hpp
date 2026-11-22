@@ -11,15 +11,20 @@
 #include "ui/alert/dialog.hpp"
 #include "ui/image/url.hpp"
 #include <QString>
+#include <QPointer>
+#include <QTimer>
 #include <chrono>
 #include <cstdint>
 #include <numeric>
 #include <qevent.h>
 
+class DictationSession;
+class HudActivity;
 class BaseView;
 class DialogContentWidget;
 class ActionPanelView;
 class QWindow;
+class QQuickItem;
 
 #define VALUE_OR(VALUE, FALLBACK) (VALUE ? VALUE : FALLBACK)
 
@@ -41,6 +46,7 @@ using ArgumentValues = std::vector<std::pair<QString, QString>>;
 struct ActivateEntrypointOptions {
   LaunchProps props;
   bool toggleIfAlreadyActive = true;
+  QQuickItem *toggleAnchor = nullptr;
 };
 
 struct CompleterState {
@@ -114,6 +120,8 @@ signals:
   void confirmAlertRequested(DialogContentWidget *widget);
   void loadingChanged(bool value) const;
   void showHudRequested(const QString &title, const std::optional<ImageURL> &icon);
+  void dictationHudRequested(DictationSession *session);
+  void activityHudRequested(HudActivity *activity);
 
   void completionValuesChanged(const ArgumentValues &values) const;
 
@@ -133,6 +141,7 @@ signals:
 
 public:
   Q_INVOKABLE void closeWindow(const CloseWindowOptions &settings = {});
+  Q_INVOKABLE void closeWindowOnFocusLoss();
   void closeWindow(const CloseWindowOptions &settings, std::chrono::milliseconds delay);
   Q_INVOKABLE void showWindow();
 
@@ -152,6 +161,7 @@ public:
   QWindow *window() const { return m_window; }
 
   void setPopToRootOnClose(bool value);
+  void setPopToRootTimeout(std::optional<std::chrono::seconds> timeout);
 
   bool hasCompleter() const;
 
@@ -211,6 +221,7 @@ public:
   void executeAction(AbstractAction *action);
 
 private:
+  bool eventFilter(QObject *object, QEvent *event) override;
   void executeActionNow(AbstractAction *action);
 
 public:
@@ -226,6 +237,8 @@ public:
    * are beyond confusing.
    */
   void showHud(const QString &title, const std::optional<ImageURL> &icon = std::nullopt);
+  void showDictationHud(DictationSession *session);
+  void showActivityHud(HudActivity *activity);
 
   void launch(const std::shared_ptr<AbstractCmd> &cmd);
   void launch(const std::shared_ptr<AbstractCmd> &cmd, const ArgumentValues &arguments);
@@ -273,14 +286,18 @@ private:
   void activateView(const ViewState &state);
 
   ApplicationContext &m_ctx;
+  QPointer<QQuickItem> m_toggleAnchor;
   std::vector<std::unique_ptr<CommandFrame>> m_frames;
 
   struct PendingPopToRoot {
     PopToRootType type = PopToRootType::Immediate;
     bool clearSearch = false;
+    std::chrono::system_clock::time_point closedAt;
   };
 
   void applyPopToRoot(const PendingPopToRoot &popToRoot);
+  void schedulePopToRootWhileClosed();
+  void popToRootWhileClosed();
 
   ViewState *findViewState(const BaseView *view);
   const ViewState *findViewState(const BaseView *view) const;
@@ -290,6 +307,8 @@ private:
   bool m_windowActivated = false;
   bool m_isPanelOpened = false;
   bool m_popToRootOnClose = false;
+  std::optional<std::chrono::seconds> m_popToRootTimeout;
+  QTimer m_popToRootTimer;
   bool m_instantDismiss = false;
   bool m_closeOnFocusLoss = false;
   QWindow *m_window = nullptr;

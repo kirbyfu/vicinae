@@ -1,4 +1,5 @@
 #include <QtLogging>
+#include <atomic>
 #include <future>
 #include <windows.h>
 #include "services/global-shortcuts/windows-global-shortcut-backend.hpp"
@@ -88,7 +89,7 @@ Qt::KeyboardModifiers qtModifiers(UINT win) {
 }
 
 WindowsGlobalShortcutBackend *g_backend = nullptr;
-UINT g_heldMods = 0;
+std::atomic<UINT> g_swallowedMods = 0;
 
 // One-shot key up suppressions, armed when the launcher hides while keys are still
 // physically held (escape, return...). Without this the window regaining foreground
@@ -156,21 +157,20 @@ LRESULT CALLBACK keyboardHookProc(int nCode, WPARAM wParam, LPARAM lParam) {
 
     const bool down = wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN;
     const UINT bit = modBitForVk(k->vkCode);
-    if (down) {
-      g_heldMods |= bit;
-    } else {
-      g_heldMods &= ~bit;
-    }
-    const UINT asyncMods = currentModifiers();
-    // The hook misses some key ups (e.g. Win released on the lock screen after Win+L), which would leave a
-    // modifier held here for good. Outside capture we never eat modifiers, so the async key state is right
-    // for every modifier but the one of this event, which it doesn't include yet.
-    if (g_backend && !g_backend->capturing()) { g_heldMods &= asyncMods | bit; }
-    const UINT mods = (asyncMods | g_heldMods) & (down ? ~0u : ~bit);
+    // The hook misses key ups on the lock screen and under elevated windows, so held
+    // modifiers come from the system, which has not applied the current event yet
+    const UINT held = currentModifiers() | g_swallowedMods;
+    const UINT mods = down ? (held | bit) : (held & ~bit);
     // both must run on every event so their internal states stay consistent
     const bool shortcutEaten = g_backend && g_backend->dispatchKey(k->vkCode, mods, down);
     const bool suppressionEaten = consumeSuppressedKeyUp(k->vkCode, down);
-    if (shortcutEaten || suppressionEaten) { return 1; }
+    const bool eaten = shortcutEaten || suppressionEaten;
+    if (!down) {
+      g_swallowedMods &= ~bit;
+    } else if (eaten) {
+      g_swallowedMods |= bit;
+    }
+    if (eaten) { return 1; }
   }
   return CallNextHookEx(nullptr, nCode, wParam, lParam);
 }
@@ -293,11 +293,7 @@ void WindowsGlobalShortcutBackend::setCapturing(bool capturing) {
   std::scoped_lock lock(m_targetsMutex);
   m_capturing = capturing;
   m_chord = 0;
-}
-
-bool WindowsGlobalShortcutBackend::capturing() {
-  std::scoped_lock lock(m_targetsMutex);
-  return m_capturing;
+  g_swallowedMods = 0;
 }
 
 void WindowsGlobalShortcutBackend::suppressNextKeyUp(unsigned int vk) {

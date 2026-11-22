@@ -10,6 +10,9 @@
 class RootProvider;
 
 class RootItemManager;
+namespace AI {
+class ToolRegistry;
+}
 
 class ExtensionSettingsModel : public QAbstractListModel {
   Q_OBJECT
@@ -25,14 +28,20 @@ class ExtensionSettingsModel : public QAbstractListModel {
   Q_PROPERTY(QString selectedAlias READ selectedAlias NOTIFY selectedChanged)
   Q_PROPERTY(PreferenceFormModel *preferenceModel READ preferenceModel CONSTANT)
   Q_PROPERTY(PreferenceFormModel *commandPreferenceModel READ commandPreferenceModel CONSTANT)
+  Q_PROPERTY(PreferenceFormModel *toolPreferenceModel READ toolPreferenceModel CONSTANT)
   Q_PROPERTY(int selectedRow READ selectedRow NOTIFY selectedChanged)
   Q_PROPERTY(QString selectedProviderId READ selectedProviderId NOTIFY selectedChanged)
   Q_PROPERTY(QString selectedProvenance READ selectedProvenance NOTIFY selectedChanged)
   Q_PROPERTY(ProviderCommandModel *commandModel READ commandModel CONSTANT)
+  Q_PROPERTY(QVariantList settingsPages READ settingsPages NOTIFY selectedChanged)
+  Q_PROPERTY(QVariantList tools READ tools NOTIFY toolsChanged)
+  Q_PROPERTY(bool toolsAvailable READ toolsAvailable NOTIFY toolsChanged)
+  Q_PROPERTY(QVariantList toolPolicyItems READ toolPolicyItems CONSTANT)
 
 signals:
   void selectedChanged();
   void providerEnabledChanged(const QString &providerId, bool enabled);
+  void toolsChanged();
 
 public:
   enum Role {
@@ -50,7 +59,7 @@ public:
     ProvenanceRole
   };
 
-  explicit ExtensionSettingsModel(QObject *parent = nullptr);
+  explicit ExtensionSettingsModel(AI::ToolRegistry &tools, QObject *parent = nullptr);
 
   int rowCount(const QModelIndex &parent = {}) const override;
   QVariant data(const QModelIndex &index, int role) const override;
@@ -67,9 +76,14 @@ public:
   int selectedRow() const { return m_selectedRow; }
   PreferenceFormModel *preferenceModel() const { return m_prefModel; }
   PreferenceFormModel *commandPreferenceModel() const { return m_cmdPrefModel; }
+  PreferenceFormModel *toolPreferenceModel() const { return m_toolPrefModel; }
   QString selectedProviderId() const;
   QString selectedProvenance() const;
   ProviderCommandModel *commandModel() const { return m_commandModel; }
+  QVariantList settingsPages() const;
+  QVariantList tools() const;
+  bool toolsAvailable() const;
+  QVariantList toolPolicyItems() const;
 
   Q_INVOKABLE void setFilter(const QString &text);
   Q_INVOKABLE void select(int row);
@@ -85,6 +99,8 @@ public:
   Q_INVOKABLE void setShortcutByEntrypointId(const QString &id, const QString &shortcut);
   Q_INVOKABLE void clearShortcutByEntrypointId(const QString &id);
   Q_INVOKABLE void loadCommandPreferences(const QString &entrypointId);
+  Q_INVOKABLE void loadToolPreferences(const QString &toolId);
+  Q_INVOKABLE void setToolPolicy(const QString &toolId, const QString &policy);
 
 private:
   struct Entry {
@@ -119,6 +135,8 @@ private:
   QString m_filter;
   PreferenceFormModel *m_prefModel;
   PreferenceFormModel *m_cmdPrefModel;
+  PreferenceFormModel *m_toolPrefModel;
   ProviderCommandModel *m_commandModel;
   std::set<QString> m_expandedProviders;
+  AI::ToolRegistry &m_tools;
 };

@@ -1,4 +1,5 @@
 #pragma once
+#include <span>
 #include "command/argument.hpp"
 #include "fuzzy/fuzzy-searchable.hpp"
 #include "command/command-types.hpp"
@@ -11,6 +12,8 @@
 #include "services/root-item-manager/visit-tracker.hpp"
 #include "ui/image/url.hpp"
 #include "command/preference.hpp"
+#include "command/settings-page.hpp"
+#include "services/ai/tool-contribution.hpp"
 #include "ui/views/list-accessory.hpp"
 #include <cstdint>
 #include <qdnslookup.h>
@@ -199,6 +202,10 @@ public:
 
   virtual std::vector<std::shared_ptr<RootItem>> loadItems() const = 0;
   virtual PreferenceList preferences() const { return {}; }
+  virtual std::vector<SettingsPage> settingsPages() const { return {}; }
+  virtual std::vector<AI::ToolContribution> tools() const { return {}; }
+
+  virtual QString toolNamespace() const { return uniqueId(); }
 };
 
 struct RootItemMetadata {
@@ -287,6 +294,10 @@ public:
 
   PreferenceValues getProviderPreferenceValues(const QString &id) const;
   PreferenceValues getItemPreferenceValues(const EntrypointId &id) const;
+  PreferenceValues getToolPreferenceValues(const EntrypointId &id,
+                                           std::span<const Preference> preferences) const;
+  bool setToolPreferenceValues(const EntrypointId &id, std::span<const Preference> preferences,
+                               const PreferenceValues &values);
 
   /**
    * Merge the item preferences with the provider preferences.

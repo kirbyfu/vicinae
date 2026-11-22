@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <glaze/json/generic.hpp>
 #include <optional>
 #include <string>
@@ -8,6 +9,7 @@
 #include <vector>
 #include <qnamespace.h>
 #include <qstring.h>
+#include "ui/image/url.hpp"
 
 using PreferenceValues = glz::generic::object_t;
 
@@ -30,7 +32,10 @@ inline bool isEmpty(const glz::generic &value) {
 class Preference {
 public:
   struct UnknownData {};
-  struct TextData {};
+  struct TextData {
+    // Long, multi-line text edited in a dedicated dialog.
+    bool multiline = false;
+  };
   struct PasswordData {};
   struct CheckboxData {
     std::optional<QString> label;
@@ -39,6 +44,9 @@ public:
     bool multiple = false;
   };
   struct ShortcutData {};
+  struct CustomData {
+    QString component;
+  };
   struct FilePickerData {
     bool multiple = false;
     // Paths that are always part of the effective set but are not part of the stored
@@ -53,14 +61,21 @@ public:
     struct Option {
       QString title;
       QString value;
+      std::optional<ImageURL> icon;
+    };
+
+    struct Section {
+      QString title;
+      std::vector<Option> options;
     };
 
     std::vector<Option> options;
+    std::vector<Section> sections;
   };
 
 private:
   using Data = std::variant<UnknownData, TextData, PasswordData, CheckboxData, DropdownData, FilePickerData,
-                            DirectoryPickerData, AppPickerData, ShortcutData>;
+                            DirectoryPickerData, AppPickerData, ShortcutData, CustomData>;
   QString m_name;
   QString m_title;
   QString m_description;
@@ -77,10 +92,17 @@ public:
     return {id, CheckboxData{.label = label}};
   }
   static Preference makeText(const QString &id) { return {id, TextData{}}; }
+  static Preference makeLongText(const QString &id) { return {id, TextData{.multiline = true}}; }
   static Preference makePassword(const QString &id) { return {id, PasswordData{}}; }
   static Preference makeShortcut(const QString &id) { return {id, ShortcutData{}}; }
+  static Preference custom(const QString &id, const QString &component) {
+    return {id, CustomData{.component = component}};
+  }
   static Preference makeDropdown(const QString &id, const std::vector<DropdownData::Option> &options = {}) {
-    return {id, DropdownData{options}};
+    return {id, DropdownData{.options = options}};
+  }
+  static Preference makeDropdown(const QString &id, const std::vector<DropdownData::Section> &sections) {
+    return {id, DropdownData{.sections = sections}};
   }
   static Preference file(const QString &id) { return {id, FilePickerData()}; }
   static Preference files(const QString &id) { return {id, FilePickerData{.multiple = true}}; }
@@ -125,3 +147,19 @@ public:
 };
 
 using PreferenceList = std::vector<Preference>;
+
+namespace preferences {
+
+inline PreferenceList merge(PreferenceList base, const PreferenceList &overrides) {
+  base.reserve(base.size() + overrides.size());
+  for (const auto &pref : overrides) {
+    const auto existing = std::ranges::find(base, pref.name(), &Preference::name);
+    if (existing != base.end())
+      *existing = pref;
+    else
+      base.emplace_back(pref);
+  }
+  return base;
+}
+
+} // namespace preferences

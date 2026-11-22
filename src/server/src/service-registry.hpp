@@ -7,6 +7,7 @@ class AppService;
 class OmniDatabase;
 class LocalStorageService;
 class ExtensionManager;
+class HeadlessCommandRunner;
 class ClipboardService;
 class FontService;
 class ScreenshotService;
@@ -44,10 +45,19 @@ class AudioControlService;
 class MediaControlService;
 class AppRuntime;
 class GlobalShortcutService;
+class LocalModelRegistry;
+class DictationService;
+class AiCommandStore;
 
 namespace config {
 class Manager;
 };
+
+namespace AI {
+class Service;
+class ToolRegistry;
+class ConversationStore;
+}; // namespace AI
 
 class ServiceRegistry : public QObject {
 
@@ -66,6 +76,7 @@ public:
   ScreenshotService *screenshots() const;
   LocalStorageService *localStorage() const;
   ExtensionManager *extensionManager() const;
+  HeadlessCommandRunner *headlessCommandRunner() const;
   ClipboardService *clipman() const;
   AppService *appDb() const;
   ToastService *toastService() const;
@@ -95,6 +106,12 @@ public:
   MediaControlService *mediaControl() const;
   AppRuntime *appRuntime() const;
   GlobalShortcutService *globalShortcuts() const;
+  AI::Service *ai() const;
+  AI::ToolRegistry *tools() const;
+  AI::ConversationStore *conversations() const;
+  LocalModelRegistry *localModels() const;
+  DictationService *dictation() const;
+  AiCommandStore *aiCommands() const;
 
   void setPowerManager(std::unique_ptr<PowerManager> manager);
   void setTrayHost(std::unique_ptr<AbstractTrayHost> service);
@@ -109,6 +126,7 @@ public:
   void setShortcutService(std::unique_ptr<ShortcutService> service);
   void setCalculatorService(std::unique_ptr<CalculatorService> service);
   void setExtensionRegistry(std::unique_ptr<ExtensionRegistry> service);
+  void setHeadlessCommandRunner(std::unique_ptr<HeadlessCommandRunner> runner);
   void setFileService(std::unique_ptr<FileService> service);
   void setGlyphService(std::unique_ptr<GlyphService> service);
   void setToastService(std::unique_ptr<ToastService> service);
@@ -138,6 +156,12 @@ public:
   void setMediaControl(std::unique_ptr<MediaControlService> service);
   void setAppRuntime(std::unique_ptr<AppRuntime> service);
   void setGlobalShortcuts(std::unique_ptr<GlobalShortcutService> service);
+  void setAI(std::unique_ptr<AI::Service>);
+  void setConversations(std::unique_ptr<AI::ConversationStore> store);
+  void setTools(std::unique_ptr<AI::ToolRegistry> registry);
+  void setLocalModels(std::unique_ptr<LocalModelRegistry> registry);
+  void setDictation(std::unique_ptr<DictationService> service);
+  void setAiCommands(std::unique_ptr<AiCommandStore> store);
 
 private:
   static inline ServiceRegistry *s_instance = nullptr;
@@ -147,6 +171,7 @@ private:
   std::unique_ptr<OmniDatabase> m_omniDb;
   std::unique_ptr<LocalStorageService> m_localStorage;
   std::unique_ptr<ExtensionManager> m_extensionManager;
+  std::unique_ptr<HeadlessCommandRunner> m_headlessCommandRunner;
   std::unique_ptr<ClipboardService> m_clipman;
   std::unique_ptr<FontService> m_fontService;
   std::unique_ptr<ScreenshotService> m_screenshots;
@@ -182,4 +207,10 @@ private:
   std::unique_ptr<MediaControlService> m_mediaControl;
   std::unique_ptr<AppRuntime> m_appRuntime;
   std::unique_ptr<GlobalShortcutService> m_globalShortcuts;
+  std::unique_ptr<LocalModelRegistry> m_localModels;
+  std::unique_ptr<AI::Service> m_ai;
+  std::unique_ptr<DictationService> m_dictation;
+  std::unique_ptr<AiCommandStore> m_aiCommands;
+  std::unique_ptr<AI::ToolRegistry> m_tools;
+  std::unique_ptr<AI::ConversationStore> m_conversations;
 };

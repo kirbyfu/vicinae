@@ -60,13 +60,14 @@ Machine-specific settings go in `build-local.env.bat` (gitignored, see `build-lo
    fall back to the stock application icon (`SIID_APPLICATION`) instead of the "?". Why: the shell returns
    `E_PENDING` for icons not yet in its cache, and the "?" then stuck to Chrome for the life of the process.
 9. `fix(windows): recover modifier shortcuts from missed key ups`
-   `windows-global-shortcut-backend.cpp`: outside capture, the hook drops tracked modifiers (`g_heldMods`) that
-   `GetAsyncKeyState` says are up, and `dispatchModifier` starts a new chord when a modifier goes down alone.
-   Why: Win+L locks on the L key down, so the Win/L key ups never reach the hook; the stale held Win and broken
-   chord made the next bare Win press open the Start menu instead of Vicinae. Keep `g_heldMods` itself: the
-   shortcut recorder eats modifiers, so the async key state never sees them there. Good upstream PR candidate.
+   `windows-global-shortcut-backend.cpp`: `dispatchModifier` starts a new chord when a modifier goes down alone.
+   Why: Win+L locks on the L key down, so the Win/L key ups never reach the hook and `m_chord` stays broken; the
+   next bare Win press then did nothing (or opened the Start menu). Upstream #2157 (v0.30.1) fixed the other half
+   (stale held modifiers, now read from `GetAsyncKeyState` plus `g_swallowedMods`), so the merge took upstream's
+   hook and dropped this patch's `g_heldMods` pruning and `capturing()`. Good upstream PR candidate (chord reset).
 10. `fix(windows): draw the launcher border on Windows 10`
-   `WindowsWindowAttached::nativeChromeSupported()` (Windows 11+) gates the DWM border/rounding; below it
+   `WindowsWindowAttached::nativeChromeSupported()` (Windows 11+; same check as upstream's
+   `extendedTitlebarSupported()`, kept separate) gates the DWM border/rounding; below it
    `LauncherWindowWindows.qml` sets `drawBorder` so `LauncherWindow.qml` draws its QML border ring, and
    `nativeCornerRadius()` is 0 (Windows 10 windows are square). Why: `DWMWA_BORDER_COLOR` is Windows 11 only, so on
    Windows 10 the launcher had no border and the theme's `main_window.border` did nothing. Good upstream PR candidate.

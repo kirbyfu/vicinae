@@ -1,5 +1,7 @@
 #include "ui/settings/settings-controller.hpp"
 #include "command/command-types.hpp"
+#include "service-registry.hpp"
+#include "services/ai/tool-registry.hpp"
 #include "ui/windows/settings-window.hpp"
 #include <QTimer>
 
@@ -36,6 +38,24 @@ void SettingsController::openExtensionPreferences(const EntrypointId &id) {
   QTimer::singleShot(0, [this, id]() {
     if (m_window) m_window->selectExtension(QString::fromStdString(id));
   });
+}
+
+void SettingsController::openSubpage(const QString &providerId, const QString &subpage) {
+  openWindow();
+  QTimer::singleShot(0, [this, providerId, subpage]() {
+    if (m_window) m_window->openSubpage(providerId, subpage);
+  });
+}
+
+void SettingsController::openToolPreferences(const EntrypointId &id) {
+  const auto *tool = m_ctx.services->tools()->find(id.provider, id.entrypoint);
+  if (!tool) return;
+  openWindow();
+  QTimer::singleShot(
+      0, this,
+      [this, provider = QString::fromStdString(id.provider), key = QString::fromStdString(tool->name)] {
+        if (m_window) m_window->selectTool(provider, key);
+      });
 }
 
 void SettingsController::createSettingsWindow() {
