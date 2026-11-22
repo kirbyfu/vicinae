@@ -105,8 +105,10 @@ package on `sys.path`). Then quit Vicinae and run the installer: it upgrades the
 
 - MSVC: Visual Studio 2022 Build Tools (matches CI `depot-windows-2022-16`). Chosen over 2026 deliberately.
 - CMake, Ninja, uv, aqtinstall: mise, pinned in `mise.local.toml`.
-- Qt 6.10.1 `win64_msvc2022_64` + qtshadertools, qtimageformats (same as CI), in `.toolchains\Qt` next to the repo
-  checkout (`build-local.bat`'s default).
+- Qt 6.10.1 `win64_msvc2022_64` + qtshadertools, qtimageformats, qtmultimedia (same as CI; multimedia is required
+  since v0.30), in `.toolchains\Qt` next to the repo checkout (`build-local.bat`'s default). When a merge fails
+  configure with a missing Qt component, compare against `modules:` in `.github/workflows/build-windows.yaml` and
+  re-run the aqt command below with the new module.
 - Inno Setup 6 per-user (for `scripts/mkinstaller.ps1`).
 
 `build-local.bat env` prints the detected `QTDIR`, `MISE` and `VSDIR`; override any of them in `build-local.env.bat`.
@@ -119,7 +121,7 @@ From the folder that contains the repo checkout:
 winget install Microsoft.VisualStudio.2022.BuildTools --override "--wait --passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
 winget install jdx.mise
 winget install JRSoftware.InnoSetup --scope user
-mise exec pipx:aqtinstall@3.3.0 -- aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -m qtshadertools qtimageformats -O .toolchains\Qt
+mise exec pipx:aqtinstall@3.3.0 -- aqt install-qt windows desktop 6.10.1 win64_msvc2022_64 -m qtshadertools qtimageformats qtmultimedia -O .toolchains\Qt
 cd vicinae
 mise install                              # tools from mise.local.toml; run `mise trust` if asked
 build-local.bat configure
